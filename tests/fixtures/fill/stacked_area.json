@@ -1,0 +1,13 @@
+{
+  "_kc": { "width": 560, "height": 300 },
+  "type": "line",
+  "data": {
+    "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    "datasets": [
+      { "label": "API", "data": [10, 14, 12, 18, 22, 9, 7], "fill": "origin" },
+      { "label": "Web", "data": [6, 9, 11, 8, 12, 15, 10], "fill": "-1" },
+      { "label": "Jobs", "data": [3, 2, 5, 4, 6, 3, 2], "fill": "stack" }
+    ]
+  },
+  "options": { "scales": { "y": { "stacked": true } }, "plugins": { "title": { "display": true, "text": "Stacked area" } } }
+}

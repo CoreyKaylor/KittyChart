@@ -1,0 +1,9 @@
+{
+  "_kc": { "width": 400, "height": 360 },
+  "type": "radar",
+  "data": {
+    "labels": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+    "datasets": [{ "label": "Wind", "data": [4, 7, 3, 9, 5, 2, 6, 8], "fill": "origin", "tension": 0.2 }]
+  },
+  "options": { "scales": { "r": { "grid": { "circular": true }, "beginAtZero": true } } }
+}

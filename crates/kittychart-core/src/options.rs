@@ -30,6 +30,11 @@ impl<'a> Scopes<'a> {
         self
     }
 
+    /// The scope objects, in priority order (to chain one resolver after another).
+    pub fn raw(&self) -> Vec<&'a Value> {
+        self.scopes.clone()
+    }
+
     /// Append lower-priority scopes, for example a route such as `{"color": <chart color>}`.
     pub fn then(mut self, more: impl IntoIterator<Item = &'a Value>) -> Self {
         self.scopes.extend(more.into_iter().filter(|v| v.is_object()));

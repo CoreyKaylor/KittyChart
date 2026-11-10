@@ -11,11 +11,13 @@ pub mod config;
 pub mod defaults;
 pub mod draw;
 pub mod element;
+pub mod filler;
 pub mod format;
 pub mod layout;
 pub mod math;
 pub mod options;
 pub mod plugins;
+pub mod radial;
 pub mod scale;
 pub mod theme;
 

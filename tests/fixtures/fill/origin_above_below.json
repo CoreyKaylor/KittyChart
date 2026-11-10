@@ -1,0 +1,14 @@
+{
+  "_kc": { "width": 560, "height": 280 },
+  "type": "line",
+  "data": {
+    "labels": ["1", "2", "3", "4", "5", "6", "7", "8"],
+    "datasets": [{
+      "label": "Net flow",
+      "data": [5, 12, -4, -9, 3, 8, -6, 4],
+      "tension": 0.35,
+      "borderColor": "rgb(75, 192, 192)",
+      "fill": { "target": "origin", "above": "rgba(75, 192, 192, 0.45)", "below": "rgba(255, 99, 132, 0.45)" }
+    }]
+  }
+}

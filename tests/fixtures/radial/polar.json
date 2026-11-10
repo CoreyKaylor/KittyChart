@@ -1,0 +1,9 @@
+{
+  "_kc": { "width": 420, "height": 380 },
+  "type": "polarArea",
+  "data": {
+    "labels": ["Red", "Green", "Yellow", "Grey", "Blue"],
+    "datasets": [{ "label": "Votes", "data": [11, 16, 7, 3, 14] }]
+  },
+  "options": { "plugins": { "legend": { "position": "right" } } }
+}

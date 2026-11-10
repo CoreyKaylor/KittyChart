@@ -10,11 +10,15 @@ use crate::arc::{Arc, ArcOptions, ArcRadius, SpacingMode, angle_between};
 use crate::config::{ChartConfig, ChartType, Label};
 use crate::defaults::{BACKGROUND_COLORS, BORDER_COLORS, DEFAULTS, overrides_for};
 use crate::draw::{PointStyle, clip_area};
-use crate::element::{Bar, BarOptions, Edges, Line, LineOptions, Point, PointOptions, SpanGaps, Stepped};
+use crate::element::{
+    Bar, BarOptions, Edges, Line, LineOptions, Point, PointOptions, Prop, SpanGaps, Stepped,
+};
+use crate::filler::{FillJob, FillSpec, FillTarget, TargetGeom};
 use crate::layout::{self, LayoutItem};
 use crate::math::{is_between, sign};
 use crate::options::{Corners, FontSpec, Padding, Scopes, as_num, merge_if};
 use crate::plugins::{Legend, LegendItem, LegendLabels, LegendTitle, TextBlock};
+use crate::radial::RadialScale;
 use crate::scale::{Axis, ChartArea, Position, Scale, ScaleKind, Stacked};
 
 /// One parsed data point. Values are in scale units (category indices for category scales).
@@ -64,6 +68,8 @@ pub struct DatasetMeta {
     pub points: Vec<Point>,
     pub line: Option<Line>,
     pub arcs: Vec<Arc>,
+    /// Resolved `fill` (filler plugin), for datasets with a line element.
+    pub fill: Option<FillSpec>,
     pub bars: Vec<Bar>,
     pub clip: Option<Padding>,
 }
@@ -86,6 +92,8 @@ pub struct Chart {
     /// Datasets after the `colors` plugin ran.
     datasets: Vec<Value>,
     pub scales: Vec<Scale>,
+    /// The `radialLinear` scale of radar and polar area charts.
+    pub radial: Option<RadialScale>,
     pub metas: Vec<DatasetMeta>,
     stacks: HashMap<StackKey, HashMap<usize, Option<f64>>>,
     pub title: TextBlock,
@@ -120,6 +128,7 @@ impl Chart {
             config,
             datasets,
             scales: vec![],
+            radial: None,
             metas: vec![],
             stacks: HashMap::new(),
             title: placeholder_block(),
@@ -324,6 +333,22 @@ impl Chart {
             let ty = merged.get("type").and_then(Value::as_str).unwrap_or("linear").to_owned();
             let type_defaults = DEFAULTS["scales"].get(&ty).cloned().unwrap_or(json!({}));
             merge_if(&mut merged, &[&type_defaults, &self.theme_scale, &DEFAULTS["scale"]]);
+            if ty == "radialLinear" {
+                let radial_routes = json!({
+                    "ticks": { "color": chart_color },
+                    "pointLabels": { "color": chart_color },
+                    "grid": { "color": chart_border },
+                    "angleLines": { "color": chart_border },
+                });
+                self.radial = Some(RadialScale::new(
+                    &id,
+                    merged,
+                    radial_routes,
+                    self.font_fallback.clone(),
+                    labels.clone(),
+                ));
+                continue;
+            }
             let kind = match ty.as_str() {
                 "category" => ScaleKind::Category,
                 "logarithmic" => ScaleKind::Logarithmic,
@@ -380,7 +405,7 @@ impl Chart {
                 .or(self.first_scale_for_axis(Axis::Y));
             // Arc charts have no cartesian scales (`linkScales() {}`); usize::MAX marks "none".
             let (x_scale, y_scale) = match (x, y) {
-                _ if kind.is_arc() => (usize::MAX, usize::MAX),
+                _ if !kind.is_cartesian() => (usize::MAX, usize::MAX),
                 (Some(x), Some(y)) => (x, y),
                 _ => continue,
             };
@@ -400,13 +425,14 @@ impl Chart {
                 points: vec![],
                 line: None,
                 arcs: vec![],
+                fill: None,
                 bars: vec![],
                 clip: None,
             };
             self.metas.push(meta);
         }
         for m in 0..self.metas.len() {
-            if self.metas[m].kind.is_arc() {
+            if !self.metas[m].kind.is_cartesian() {
                 continue;
             }
             let v = self.metas[m].v_scale();
@@ -431,7 +457,7 @@ impl Chart {
 
     fn parse_all(&mut self) {
         for m in 0..self.metas.len() {
-            if self.metas[m].kind.is_arc() {
+            if !self.metas[m].kind.is_cartesian() {
                 self.metas[m].parsed = self.parse_arc_values(m);
                 continue;
             }
@@ -521,15 +547,18 @@ impl Chart {
         out
     }
 
-    /// Doughnut `parse`: `+data[i]`, or `+data[i][parsing.key ?? 'value']` for objects.
+    /// Doughnut `parse` (`+data[i]`, or `data[i][parsing.key ?? 'value']`), and radial
+    /// `_parseObjectDataRadialScale` (`data[i][parsing.rAxisKey ?? 'r']`). The value goes in `y`.
     fn parse_arc_values(&self, m: usize) -> Vec<Parsed> {
         let ds = &self.datasets[self.metas[m].index];
+        let (opt, default) =
+            if self.metas[m].kind.is_radial() { ("rAxisKey", "r") } else { ("key", "value") };
         let key = ds
             .get("parsing")
             .or_else(|| self.config.options.get("parsing"))
-            .and_then(|p| p.get("key"))
+            .and_then(|p| p.get(opt))
             .and_then(Value::as_str)
-            .unwrap_or("value");
+            .unwrap_or(default);
         let data = ds["data"].as_array().cloned().unwrap_or_default();
         let objects = data.first().is_some_and(Value::is_object);
         data.iter()
@@ -721,6 +750,20 @@ impl Chart {
                 .collect();
             self.scales[s].determine_data_limits(&ranges);
         }
+        if self.radial.is_some() {
+            let ranges: Vec<(f64, f64)> = self
+                .sorted_metas(true)
+                .into_iter()
+                .filter(|&m| self.metas[m].kind.is_radial())
+                .map(|m| {
+                    let vals = self.metas[m].parsed.iter().filter_map(|p| p.y);
+                    vals.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)))
+                })
+                .collect();
+            if let Some(r) = self.radial.as_mut() {
+                r.determine_data_limits(&ranges);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ plugins
@@ -778,7 +821,9 @@ impl Chart {
             let ds = meta.index;
             // getStyle(): line datasets use the dataset (line) element unless usePointStyle.
             let (el, idx) = match meta.kind {
-                ChartType::Line if !use_point_style => ("line", None),
+                ChartType::Line | ChartType::Radar if !use_point_style => ("line", None),
+                ChartType::Radar => ("point", Some(0)),
+                ChartType::PolarArea => ("arc", Some(0)),
                 ChartType::Scatter if !use_point_style && self.shows_line(m) => ("line", None),
                 ChartType::Line | ChartType::Scatter | ChartType::Bubble => ("point", Some(0)),
                 ChartType::Bar => ("bar", Some(0)),
@@ -805,7 +850,7 @@ impl Chart {
                 dataset_index: ds,
             });
         }
-        if self.chart_type().is_arc() {
+        if self.chart_type().is_arc() || self.chart_type() == ChartType::PolarArea {
             items = self.arc_legend_items(point_style_override);
         }
         if l.bool_or("reverse", false) {
@@ -993,7 +1038,7 @@ impl Chart {
     fn meta_overflow(&self, m: usize, line_border: f64) -> f64 {
         let meta = &self.metas[m];
         let n = meta.parsed.len();
-        if meta.kind == ChartType::Bar || meta.kind.is_arc() {
+        if meta.kind == ChartType::Bar || !meta.kind.is_cartesian() {
             return 0.0;
         }
         if self.shows_line(m) {
@@ -1012,12 +1057,172 @@ impl Chart {
         (0..self.metas.len()).map(|m| self.meta_overflow(m, 0.0)).fold(0.0, f64::max)
     }
 
+    /// Filler `afterDatasetsUpdate`: decode each line's `fill`, then resolve dataset targets
+    /// past hidden datasets (`propagate`).
+    fn update_fills(&mut self) {
+        let count = self.datasets.len();
+        let mut decoded: Vec<Option<FillSpec>> = vec![None; count];
+        let mut visible = vec![false; count];
+        for meta in &self.metas {
+            visible[meta.index] = meta.visible;
+        }
+        for m in 0..self.metas.len() {
+            let Some(line) = &self.metas[m].line else { continue };
+            let s = self.element_scopes(self.metas[m].index, self.metas[m].kind, "line");
+            let spec = crate::filler::decode_fill(
+                s.get("fill"),
+                line.options.background_color.is_some(),
+                self.metas[m].index,
+                count,
+            );
+            decoded[self.metas[m].index] = Some(spec);
+        }
+        let propagate = self.plugin_scopes("filler").bool_or("propagate", true);
+        let targets: Vec<Option<FillTarget>> =
+            decoded.iter().map(|d| d.as_ref().and_then(|d| d.target)).collect();
+        for m in 0..self.metas.len() {
+            let i = self.metas[m].index;
+            if let Some(mut spec) = decoded[i].clone() {
+                if spec.target.is_some() {
+                    spec.target = crate::filler::resolve_target(&targets, &visible, i, propagate);
+                }
+                self.metas[m].fill = Some(spec);
+            }
+        }
+    }
+
+    /// `_getTarget`: the geometry a dataset's fill runs to.
+    fn fill_target(&self, m: usize, target: FillTarget) -> Option<TargetGeom> {
+        let meta = &self.metas[m];
+        let line = meta.line.as_ref()?;
+        match target {
+            FillTarget::Dataset(i) => {
+                let other = self.metas.iter().find(|o| o.index == i && o.visible)?;
+                Some(TargetGeom::Line(other.line.clone()?, other.points.clone()))
+            }
+            FillTarget::Shape => Some(TargetGeom::Shape),
+            FillTarget::Stack => {
+                let vs = meta.v_scale();
+                let mut below: Vec<(&Line, &[Point])> = Vec::new();
+                for k in self.sorted_metas(true) {
+                    let o = &self.metas[k];
+                    if o.kind != ChartType::Line || o.v_scale() != vs {
+                        continue;
+                    }
+                    if o.index == meta.index {
+                        break;
+                    }
+                    if let Some(l) = &o.line {
+                        below.insert(0, (l, &o.points));
+                    }
+                }
+                let pts = crate::filler::stack_line(line, &meta.points, &below, self.scales[vs].bottom);
+                Some(TargetGeom::Line(Line::new(LineOptions::plain()), pts))
+            }
+            _ if meta.kind == ChartType::Radar => {
+                let r = self.radial.as_ref()?;
+                let start = if r.reverse() { r.max } else { r.min };
+                let value = match target {
+                    FillTarget::Start => start,
+                    FillTarget::End => {
+                        if r.reverse() {
+                            r.min
+                        } else {
+                            r.max
+                        }
+                    }
+                    FillTarget::Value(v) => v,
+                    _ => r.base_value(),
+                };
+                if r.circular_grid() {
+                    let (x, y, _) = r.point_for_value(0, start);
+                    return Some(TargetGeom::Arc { x, y, radius: r.distance_for_value(value) });
+                }
+                let pts: Vec<Point> = (0..r.point_labels.len())
+                    .map(|i| {
+                        let (x, y, a) = r.point_for_value(i, value);
+                        Point::at(x, y, a)
+                    })
+                    .collect();
+                (!pts.is_empty()).then(|| {
+                    TargetGeom::Line(
+                        Line { options: LineOptions::plain(), looped: true, full_loop: true },
+                        pts,
+                    )
+                })
+            }
+            _ => {
+                let vs = &self.scales[meta.v_scale()];
+                let pixel = match target {
+                    FillTarget::Start => vs.bottom,
+                    FillTarget::End => vs.top,
+                    FillTarget::Value(v) => vs.pixel_for_value(v),
+                    _ => vs.base_pixel(),
+                };
+                if !pixel.is_finite() {
+                    return None;
+                }
+                let (x, y) = if vs.is_horizontal() { (Some(pixel), None) } else { (None, Some(pixel)) };
+                let pts = crate::filler::boundary_points(line, &meta.points, x, y);
+                (!pts.is_empty()).then(|| TargetGeom::Line(Line::new(LineOptions::plain()), pts))
+            }
+        }
+    }
+
+    fn draw_fill(&self, c: &mut dyn Canvas, m: usize) {
+        let meta = &self.metas[m];
+        let (Some(line), Some(spec)) = (&meta.line, &meta.fill) else { return };
+        let Some(target) = spec.target else { return };
+        let Some(geom) = self.fill_target(m, target) else { return };
+        let color = line.options.background_color.unwrap_or(Color::TRANSPARENT);
+        let area = self.chart_area;
+        let index_bounds = if meta.kind == ChartType::Radar {
+            area
+        } else {
+            let is = &self.scales[meta.i_scale()];
+            let (p1, p2) = (is.pixel_for_value(is.min), is.pixel_for_value(is.max));
+            let (lo, hi) = (p1.min(p2), p1.max(p2));
+            if is.is_horizontal() {
+                ChartArea { left: area.left.max(lo), right: area.right.min(hi), ..area }
+            } else {
+                ChartArea { top: area.top.max(lo), bottom: area.bottom.min(hi), ..area }
+            }
+        };
+        let clip = meta.clip.map(|cl| ChartArea {
+            left: area.left - cl.left,
+            top: area.top - cl.top,
+            right: area.right + cl.right,
+            bottom: area.bottom + cl.bottom,
+        });
+        let prop = if line.looped {
+            Prop::Angle
+        } else if meta.index_axis == Axis::X {
+            Prop::X
+        } else {
+            Prop::Y
+        };
+        let job = FillJob {
+            line,
+            points: &meta.points,
+            target: geom,
+            above: spec.above.unwrap_or(color),
+            below: spec.below.unwrap_or(color),
+            prop,
+            chart_area: area,
+            clip,
+            index_bounds,
+        };
+        crate::filler::draw_fill(c, &job);
+    }
+
     fn update_datasets(&mut self) {
         for m in 0..self.metas.len() {
             match self.metas[m].kind {
                 ChartType::Line | ChartType::Scatter | ChartType::Bubble => self.update_line(m),
                 ChartType::Bar => self.update_bar(m),
                 ChartType::Pie | ChartType::Doughnut => self.update_arcs(m),
+                ChartType::Radar => self.update_radar(m),
+                ChartType::PolarArea => self.update_polar(m),
             }
             self.metas[m].clip = self.dataset_clip(m);
         }
@@ -1025,7 +1230,7 @@ impl Chart {
 
     fn dataset_clip(&self, m: usize) -> Option<Padding> {
         let meta = &self.metas[m];
-        if meta.kind.is_arc() {
+        if !meta.kind.is_cartesian() {
             return None; // getMaxOverflow() is false: no clipping
         }
         let ds = self.dataset_scopes(meta.index, meta.kind);
@@ -1082,12 +1287,83 @@ impl Chart {
                 cp1y: y,
                 cp2x: x,
                 cp2y: y,
+                angle: 0.0,
                 options: self.point_options(m, i),
             });
             prev = Some(*p);
         }
         self.metas[m].points = points;
-        self.metas[m].line = self.shows_line(m).then_some(Line { options: line_opts });
+        self.metas[m].line = self.shows_line(m).then_some(Line::new(line_opts));
+    }
+
+    /// The radar controller's `update()`: points on the radial scale, joined by a closed line.
+    fn update_radar(&mut self, m: usize) {
+        let Some(r) = self.radial.clone() else { return };
+        let n = self.metas[m].parsed.len();
+        let mut points = Vec::with_capacity(n);
+        for i in 0..n {
+            let v = self.metas[m].parsed[i].y.unwrap_or(f64::NAN);
+            let (x, y, angle) = r.point_for_value(i, v);
+            points.push(Point {
+                x,
+                y,
+                skip: x.is_nan() || y.is_nan(),
+                stop: false,
+                cp1x: x,
+                cp1y: y,
+                cp2x: x,
+                cp2y: y,
+                angle,
+                options: self.point_options(m, i),
+            });
+        }
+        let mut line_opts = self.line_options(m);
+        if !self.dataset_scopes(self.metas[m].index, ChartType::Radar).bool_or("showLine", true) {
+            line_opts.border_width = 0.0;
+        }
+        let full_loop = r.point_labels.len() == n;
+        self.metas[m].points = points;
+        self.metas[m].line = Some(Line { options: line_opts, looped: true, full_loop });
+    }
+
+    /// The polar area controller's `update()`: equal-angle arcs whose radius is the value.
+    fn update_polar(&mut self, m: usize) {
+        let Some(r) = self.radial.clone() else { return };
+        let meta = self.metas[m].clone();
+        let ds = self.dataset_scopes(meta.index, meta.kind);
+        let visible = meta.parsed.iter().filter(|p| p.y.is_some()).count().max(1);
+        let default_angle = 360.0 / visible as f64;
+        let mut angle = r.start_angle();
+        let mut arcs = Vec::with_capacity(meta.parsed.len());
+        for (i, p) in meta.parsed.iter().enumerate() {
+            let mut options = self.arc_options(m, i);
+            let s = self.element_scopes(meta.index, meta.kind, "arc");
+            let a = s.num_at("angle", Some(i)).filter(|a| *a != 0.0).unwrap_or(default_angle);
+            let start = angle;
+            let end = angle + crate::math::to_radians(a);
+            angle = end;
+            if options.spacing == 0.0 {
+                options.spacing = ds.num_or("spacing", 0.0);
+            }
+            if options.spacing_mode == SpacingMode::Angular {
+                options.spacing_mode = match ds.str("spacingMode") {
+                    Some("parallel") => SpacingMode::Parallel,
+                    Some("angular") => SpacingMode::Angular,
+                    _ => SpacingMode::Proportional,
+                };
+            }
+            arcs.push(Arc {
+                x: r.x_center,
+                y: r.y_center,
+                start_angle: start,
+                end_angle: end,
+                circumference: end - start,
+                inner_radius: 0.0,
+                outer_radius: p.y.map_or(0.0, |v| r.distance_for_value(v)),
+                options,
+            });
+        }
+        self.metas[m].arcs = arcs;
     }
 
     fn arc_rotation(&self, m: usize) -> f64 {
@@ -1484,7 +1760,18 @@ impl Chart {
         for s in &mut self.scales {
             s.configure();
         }
+        if let Some(r) = self.radial.as_mut() {
+            r.update(&area, c);
+        }
         self.update_datasets();
+        self.update_fills();
+        // Filler `beforeDraw`: bezier control points first, since fills interpolate along
+        // other datasets' curves.
+        for meta in &mut self.metas {
+            if let Some(line) = &meta.line {
+                line.update_control_points(&mut meta.points, &area, meta.index_axis == Axis::X);
+            }
+        }
 
         // Draw: layers with z ≤ 0 (boxes), then datasets, in Chart.js order.
         self.legend.draw(c);
@@ -1492,6 +1779,9 @@ impl Chart {
         self.title.draw(c);
         for s in &mut self.scales {
             s.draw(c, &area);
+        }
+        if let Some(r) = &self.radial {
+            r.draw(c);
         }
         let order = self.sorted_metas(true);
         for &m in order.iter().rev() {
@@ -1501,7 +1791,7 @@ impl Chart {
 
     fn draw_dataset(&mut self, c: &mut dyn Canvas, m: usize) {
         let area = self.chart_area;
-        let meta = &mut self.metas[m];
+        let meta = &self.metas[m];
         if let Some(clip) = meta.clip {
             clip_area(
                 c,
@@ -1511,17 +1801,19 @@ impl Chart {
                 area.bottom + clip.bottom,
             );
         }
+        // Filler `beforeDatasetDraw` (the default drawTime), inside the dataset's clip.
+        self.draw_fill(c, m);
+        let meta = &self.metas[m];
         match meta.kind {
-            ChartType::Line | ChartType::Scatter | ChartType::Bubble => {
-                if let Some(line) = meta.line.clone() {
-                    line.update_control_points(&mut meta.points, &area, meta.index_axis == Axis::X);
+            ChartType::Line | ChartType::Scatter | ChartType::Bubble | ChartType::Radar => {
+                if let Some(line) = &meta.line {
                     line.draw(c, &meta.points);
                 }
                 for p in &meta.points {
                     p.draw(c, &area);
                 }
             }
-            ChartType::Pie | ChartType::Doughnut => {
+            ChartType::Pie | ChartType::Doughnut | ChartType::PolarArea => {
                 for a in &meta.arcs {
                     a.draw(c);
                 }
@@ -1644,14 +1936,18 @@ fn apply_colors_plugin(config: &ChartConfig, theme: Option<&crate::theme::Theme>
     let mut color_index = 0;
     for (i, ds) in datasets.iter_mut().enumerate() {
         let kind = ds.get("type").and_then(Value::as_str).and_then(ChartType::parse).unwrap_or(chart_type);
-        if kind.is_arc() {
-            // colorizeDoughnutDataset: one solid border-palette color per data point.
+        if kind.is_arc() || kind == ChartType::PolarArea {
+            // colorizeDoughnutDataset (solid border colors) / colorizePolarAreaDataset
+            // (translucent background colors): one color per data point.
+            let polar = kind == ChartType::PolarArea;
             let n = ds["data"].as_array().map_or(0, Vec::len);
             let colors: Vec<Value> = (0..n)
                 .map(|_| {
-                    let c = match theme {
-                        Some(t) => t.border_color(color_index),
-                        None => BORDER_COLORS[color_index % BORDER_COLORS.len()].to_owned(),
+                    let c = match (theme, polar) {
+                        (Some(t), false) => t.border_color(color_index),
+                        (Some(t), true) => t.fill_color(color_index),
+                        (None, false) => BORDER_COLORS[color_index % BORDER_COLORS.len()].to_owned(),
+                        (None, true) => BACKGROUND_COLORS[color_index % BACKGROUND_COLORS.len()].to_owned(),
                     };
                     color_index += 1;
                     json!(c)

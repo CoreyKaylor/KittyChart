@@ -80,10 +80,13 @@ pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
                 "cutout": 0, "rotation": 0, "circumference": 360, "radius": "100%",
                 "spacing": 0, "spacingMode": "angular", "indexAxis": "r"
             },
-            "bubble": {}
+            "bubble": {},
+            "radar": { "indexAxis": "r", "showLine": true, "elements": { "line": { "fill": "start" } } },
+            "polarArea": { "indexAxis": "r", "startAngle": 0, "spacing": 0, "spacingMode": "proportional" }
         },
         "plugins": {
             "colors": { "enabled": true, "forceOverride": false },
+            "filler": { "propagate": true, "drawTime": "beforeDatasetDraw" },
             "title": {
                 "align": "center",
                 "display": false,
@@ -156,7 +159,23 @@ pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
         "scales": {
             "category": {},
             "linear": {},
-            "logarithmic": { "ticks": { "major": { "enabled": true } } }
+            "logarithmic": { "ticks": { "major": { "enabled": true } } },
+            "radialLinear": {
+                "display": true,
+                "animate": true,
+                "position": "chartArea",
+                "angleLines": { "display": true, "lineWidth": 1, "borderDash": [], "borderDashOffset": 0.0 },
+                "grid": { "circular": false },
+                "startAngle": 0,
+                "ticks": { "showLabelBackdrop": true },
+                "pointLabels": {
+                    "backdropPadding": 2,
+                    "display": true,
+                    "font": { "size": 10 },
+                    "padding": 5,
+                    "centerPointLabels": false
+                }
+            }
         }
     })
 });
@@ -182,6 +201,20 @@ pub static OVERRIDES: LazyLock<Value> = LazyLock::new(|| {
         },
         "bubble": {
             "scales": { "x": { "type": "linear" }, "y": { "type": "linear" } }
+        },
+        "radar": { "aspectRatio": 1, "scales": { "r": { "type": "radialLinear" } } },
+        "polarArea": {
+            "aspectRatio": 1,
+            "scales": {
+                "r": {
+                    "type": "radialLinear",
+                    "angleLines": { "display": false },
+                    "beginAtZero": true,
+                    "grid": { "circular": true },
+                    "pointLabels": { "display": false },
+                    "startAngle": 0
+                }
+            }
         },
         "doughnut": { "aspectRatio": 1 },
         "pie": { "aspectRatio": 1 }

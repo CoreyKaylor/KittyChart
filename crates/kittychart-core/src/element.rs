@@ -41,6 +41,8 @@ pub struct Point {
     pub cp1y: f64,
     pub cp2x: f64,
     pub cp2y: f64,
+    /// Angle on a radial scale (radar), for fills that run along the angle.
+    pub angle: f64,
     pub options: PointOptions,
 }
 
@@ -98,19 +100,91 @@ pub struct LineOptions {
     pub cap_bezier_points: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Segment {
     pub start: usize,
     pub end: usize,
     pub looped: bool,
 }
 
+/// The point property a fill or interpolation runs along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prop {
+    X,
+    Y,
+    Angle,
+}
+
+impl Point {
+    pub fn get(&self, p: Prop) -> f64 {
+        match p {
+            Prop::X => self.x,
+            Prop::Y => self.y,
+            Prop::Angle => self.angle,
+        }
+    }
+
+    /// A plain point (for boundary lines built by the filler).
+    pub fn at(x: f64, y: f64, angle: f64) -> Point {
+        Point {
+            x,
+            y,
+            skip: false,
+            stop: false,
+            cp1x: x,
+            cp1y: y,
+            cp2x: x,
+            cp2y: y,
+            angle,
+            options: PointOptions {
+                radius: 0.0,
+                hover_radius: 0.0,
+                hit_radius: 0.0,
+                point_style: PointStyle::Circle,
+                rotation: 0.0,
+                border_width: 0.0,
+                background_color: None,
+                border_color: None,
+            },
+        }
+    }
+}
+
+impl LineOptions {
+    /// Straight, unstyled line options (filler boundary and stack lines: `{tension: 0}`).
+    pub fn plain() -> LineOptions {
+        LineOptions {
+            border_width: 0.0,
+            border_color: None,
+            background_color: None,
+            cap: LineCap::Butt,
+            join: LineJoin::Miter,
+            dash: vec![],
+            dash_offset: 0.0,
+            tension: 0.0,
+            monotone: false,
+            stepped: Stepped::No,
+            span_gaps: SpanGaps::No,
+            cap_bezier_points: false,
+        }
+    }
+}
+
+/// A line element: options plus its points (Chart.js keeps them on the element).
 #[derive(Debug, Clone)]
 pub struct Line {
     pub options: LineOptions,
+    /// `_loop`: the line closes back on itself (radar).
+    pub looped: bool,
+    /// `_fullLoop`: every label has a point.
+    pub full_loop: bool,
 }
 
 impl Line {
+    pub fn new(options: LineOptions) -> Line {
+        Line { options, looped: false, full_loop: false }
+    }
+
     fn uses_curve(&self) -> bool {
         (self.options.tension != 0.0 || self.options.monotone) && self.options.stepped == Stepped::No
     }
@@ -121,6 +195,7 @@ impl Line {
             return;
         }
         let o = &self.options;
+        let looped = if o.span_gaps != SpanGaps::No { self.looped } else { self.full_loop };
         let idx: Vec<usize> = if o.span_gaps != SpanGaps::No {
             (0..points.len()).filter(|&i| !points[i].skip).collect()
         } else {
@@ -133,10 +208,10 @@ impl Line {
             if n == 0 {
                 return;
             }
-            let mut prev = idx[0];
+            let mut prev = if looped { idx[n - 1] } else { idx[0] };
             for k in 0..n {
                 let cur = idx[k];
-                let next = idx[(k + 1).min(n - 1) % n];
+                let next = idx[(k + 1).min(n - usize::from(!looped)) % n];
                 let (p, nx) = spline_curve(&points[prev], &points[cur], &points[next], o.tension);
                 let pt = &mut points[cur];
                 pt.cp1x = p.0;
@@ -151,55 +226,50 @@ impl Line {
         }
     }
 
-    /// `_computeSegments` (no loops for cartesian charts; no segment styling yet).
-    #[allow(clippy::needless_range_loop)] // index-based, mirroring helpers.segment.js
+    /// `_computeSegments` (no segment styling yet).
     pub fn segments(&self, points: &[Point]) -> Vec<Segment> {
         let count = points.len();
         if count == 0 {
             return vec![];
         }
+        let span_gaps = self.options.span_gaps != SpanGaps::No;
+        // findStartAndEnd
         let mut start = 0;
+        let mut end = count - 1;
+        if self.looped && !span_gaps {
+            while start < count && !points[start].skip {
+                start += 1;
+            }
+        }
         while start < count && points[start].skip {
             start += 1;
         }
         start %= count;
-        let mut end = count - 1;
-        while end > start && points[end].skip {
+        if self.looped {
+            end += start;
+        }
+        while end > start && points[end % count].skip {
             end -= 1;
         }
+        end %= count;
         if self.options.span_gaps == SpanGaps::Yes {
-            return vec![Segment { start, end, looped: false }];
+            return vec![Segment { start, end, looped: self.looped }];
         }
-        // solidSegments
-        let mut result = Vec::new();
-        let mut seg_start: Option<usize> = Some(start);
-        let mut last: Option<usize> = Some(start);
-        let mut prev_skip = points[start].skip;
-        for e in start + 1..=end {
-            let cur = &points[e];
-            if cur.skip || cur.stop {
-                if !prev_skip {
-                    if let Some(s) = seg_start {
-                        result.push(Segment { start: s, end: e - 1, looped: false });
-                    }
-                    seg_start = if cur.stop { Some(e) } else { None };
-                    last = seg_start;
-                }
-            } else {
-                last = Some(e);
-                if prev_skip {
-                    seg_start = Some(e);
-                }
-            }
-            prev_skip = cur.skip;
-        }
-        if let (Some(s), Some(l)) = (seg_start, last) {
-            result.push(Segment { start: s, end: l, looped: false });
-        }
-        result
+        let max = if end < start { end + count } else { end };
+        let complete_loop = self.full_loop && start == 0 && end == count - 1;
+        solid_segments(points, start, max, complete_loop)
     }
 
-    /// Append the line's path for `seg` (`pathSegment`). Returns false if nothing was drawn.
+    /// The whole line as one path (`LineElement.path`). Returns whether it closed into a loop.
+    pub fn path(&self, c: &mut dyn Canvas, points: &[Point]) -> bool {
+        let mut looped = self.looped;
+        for seg in self.segments(points) {
+            looped &= self.path_segment(c, points, seg, false, true);
+        }
+        looped
+    }
+
+    /// `pathSegment`: append one segment, optionally in reverse. Returns `segment.loop`.
     pub fn path_segment(
         &self,
         c: &mut dyn Canvas,
@@ -207,12 +277,15 @@ impl Line {
         seg: Segment,
         reverse: bool,
         mut move_first: bool,
-    ) {
-        let ilen = seg.end.saturating_sub(seg.start);
+    ) -> bool {
+        let count = points.len();
+        if count == 0 {
+            return false;
+        }
+        let ilen = if seg.end < seg.start { count + seg.end - seg.start } else { seg.end - seg.start };
         let mut prev: Option<&Point> = None;
         for i in 0..=ilen {
-            let idx = seg.start + if reverse { ilen - i } else { i };
-            let p = &points[idx];
+            let p = &points[(seg.start + if reverse { ilen - i } else { i }) % count];
             if p.skip {
                 continue;
             }
@@ -224,6 +297,11 @@ impl Line {
             }
             prev = Some(p);
         }
+        if seg.looped {
+            let p = &points[(seg.start + if reverse { ilen } else { 0 }) % count];
+            self.line_method(c, prev, p, reverse);
+        }
+        seg.looped
     }
 
     fn line_method(&self, c: &mut dyn Canvas, prev: Option<&Point>, t: &Point, flip: bool) {
@@ -261,6 +339,68 @@ impl Line {
         }
     }
 
+    /// `LineElement.interpolate`: the point on this line where `prop` equals `value`. `None` when
+    /// there is no such point, or when there are several (Chart.js then returns an array, which
+    /// `lineTo` ignores).
+    pub fn interpolate(&self, points: &[Point], value: f64, prop: Prop) -> Option<(f64, f64)> {
+        let bounds = Bounds { prop, start: value, end: value };
+        let segs = bound_segments(&self.segments(points), points, Some(bounds));
+        let mut result = Vec::new();
+        for s in segs {
+            let (p1, p2) = (&points[s.start], &points[s.end]);
+            if s.start == s.end {
+                result.push((p1.x, p1.y));
+                continue;
+            }
+            let t = ((value - p1.get(prop)) / (p2.get(prop) - p1.get(prop))).abs();
+            let lerp = |a: (f64, f64), b: (f64, f64), t: f64| (a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1));
+            let pt = match self.options.stepped {
+                Stepped::No if self.uses_curve() => {
+                    let (a, cp1, cp2, b) =
+                        ((p1.x, p1.y), (p1.cp2x, p1.cp2y), (p2.cp1x, p2.cp1y), (p2.x, p2.y));
+                    let (q1, q2, q3) = (lerp(a, cp1, t), lerp(cp1, cp2, t), lerp(cp2, b, t));
+                    lerp(lerp(q1, q2, t), lerp(q2, q3, t), t)
+                }
+                Stepped::No => lerp((p1.x, p1.y), (p2.x, p2.y), t),
+                mode => {
+                    let x = p1.x + t * (p2.x - p1.x);
+                    let y = match mode {
+                        Stepped::Middle => {
+                            if t < 0.5 {
+                                p1.y
+                            } else {
+                                p2.y
+                            }
+                        }
+                        Stepped::After => {
+                            if t < 1.0 {
+                                p1.y
+                            } else {
+                                p2.y
+                            }
+                        }
+                        _ => {
+                            if t > 0.0 {
+                                p2.y
+                            } else {
+                                p1.y
+                            }
+                        }
+                    };
+                    (x, y)
+                }
+            };
+            let mut pt = pt;
+            match prop {
+                Prop::X => pt.0 = value,
+                Prop::Y => pt.1 = value,
+                Prop::Angle => {}
+            }
+            result.push(pt);
+        }
+        if result.len() == 1 { result.pop() } else { None }
+    }
+
     pub fn draw(&self, c: &mut dyn Canvas, points: &[Point]) {
         let o = &self.options;
         if points.is_empty() || o.border_width == 0.0 {
@@ -274,14 +414,150 @@ impl Line {
         c.set_line_join(o.join);
         c.set_line_width(o.border_width as f32);
         c.set_stroke_style(Paint::Solid(o.border_color.unwrap_or(Color::TRANSPARENT)));
-        // Chart.js strokes one Path2D holding every segment.
+        // Chart.js strokes one Path2D holding every segment, closed if it loops.
         c.begin_path();
-        for seg in self.segments(points) {
-            self.path_segment(c, points, seg, false, true);
+        if self.path(c, points) {
+            c.close_path();
         }
         c.stroke();
         c.restore();
     }
+}
+
+/// `solidSegments`.
+fn solid_segments(points: &[Point], start: usize, max: usize, mut looped: bool) -> Vec<Segment> {
+    let count = points.len();
+    let mut result = Vec::new();
+    let mut seg_start: Option<usize> = Some(start);
+    let mut last: Option<usize> = Some(start);
+    let mut prev_skip = points[start].skip;
+    for e in start + 1..=max {
+        let cur = &points[e % count];
+        if cur.skip || cur.stop {
+            if !prev_skip {
+                looped = false;
+                if let Some(s) = seg_start {
+                    result.push(Segment { start: s % count, end: (e - 1) % count, looped });
+                }
+                seg_start = if cur.stop { Some(e) } else { None };
+                last = seg_start;
+            }
+        } else {
+            last = Some(e);
+            if prev_skip {
+                seg_start = Some(e);
+            }
+        }
+        prev_skip = cur.skip;
+    }
+    if let (Some(s), Some(l)) = (seg_start, last) {
+        result.push(Segment { start: s % count, end: l % count, looped });
+    }
+    result
+}
+
+/// `{property, start, end}` bounds for segment clipping.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bounds {
+    pub prop: Prop,
+    pub start: f64,
+    pub end: f64,
+}
+
+fn angle_diff(a: f64, b: f64) -> f64 {
+    use std::f64::consts::{PI, TAU};
+    (a - b + TAU + PI) % TAU - PI
+}
+
+fn between(prop: Prop, v: f64, a: f64, b: f64) -> bool {
+    match prop {
+        Prop::Angle => crate::arc::angle_between(v, a, b, false),
+        _ => crate::math::is_between(v, a, b),
+    }
+}
+
+fn compare(prop: Prop, a: f64, b: f64) -> f64 {
+    match prop {
+        Prop::Angle => angle_diff(a, b),
+        _ => a - b,
+    }
+}
+
+fn normalize(prop: Prop, v: f64) -> f64 {
+    match prop {
+        Prop::Angle => crate::arc::normalize_angle(v),
+        _ => v,
+    }
+}
+
+/// `_boundSegment`: the parts of `seg` inside `bounds`.
+pub fn bound_segment(seg: Segment, points: &[Point], bounds: Option<Bounds>) -> Vec<Segment> {
+    let Some(b) = bounds else { return vec![seg] };
+    let count = points.len();
+    let prop = b.prop;
+    // getSegment
+    let (mut start, mut end) = (seg.start, seg.end);
+    if seg.looped {
+        start += count;
+        end += count;
+        for _ in 0..count {
+            if !between(prop, normalize(prop, points[start % count].get(prop)), b.start, b.end) {
+                break;
+            }
+            start -= 1;
+            end -= 1;
+        }
+        start %= count;
+        end %= count;
+    }
+    if end < start {
+        end += count;
+    }
+    let normalize_seg = |s: usize, e: usize| Segment {
+        start: s % count,
+        end: e % count,
+        looped: seg.looped && (e - s + 1).is_multiple_of(count),
+    };
+    let mut result = Vec::new();
+    let mut inside;
+    let mut sub_start: Option<usize> = None;
+    let mut prev_value: Option<f64> = None;
+    let mut prev = start;
+    for i in start..=end {
+        let point = &points[i % count];
+        if point.skip {
+            continue;
+        }
+        let value = normalize(prop, point.get(prop));
+        if Some(value) == prev_value {
+            continue;
+        }
+        inside = between(prop, value, b.start, b.end);
+        let start_is_before = prev_value
+            .is_some_and(|pv| between(prop, b.start, pv, value) && compare(prop, b.start, pv) != 0.0);
+        let end_is_before = compare(prop, b.end, value) == 0.0
+            || prev_value.is_some_and(|pv| between(prop, b.end, pv, value));
+        if sub_start.is_none() && (inside || start_is_before) {
+            sub_start = Some(if compare(prop, value, b.start) == 0.0 { i } else { prev });
+        }
+        if let Some(s) = sub_start
+            && (!inside || end_is_before)
+        {
+            result.push(normalize_seg(s, i));
+            sub_start = None;
+        }
+        prev = i;
+        prev_value = Some(value);
+    }
+    if let Some(s) = sub_start {
+        result.push(normalize_seg(s, end));
+    }
+    result
+}
+
+/// `_boundSegments`.
+pub fn bound_segments(segments: &[Segment], points: &[Point], bounds: Option<Bounds>) -> Vec<Segment> {
+    segments.iter().flat_map(|s| bound_segment(*s, points, bounds)).collect()
 }
 
 fn spline_curve(first: &Point, middle: &Point, after: &Point, t: f64) -> ((f64, f64), (f64, f64)) {

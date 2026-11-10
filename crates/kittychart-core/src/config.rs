@@ -15,7 +15,7 @@ pub enum ConfigError {
     BadData(usize),
 }
 
-const SUPPORTED_TYPES: &str = "line, bar, scatter, bubble, pie, doughnut";
+const SUPPORTED_TYPES: &str = "line, bar, scatter, bubble, pie, doughnut, radar, polarArea";
 
 /// Chart and dataset types with a controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,6 +26,8 @@ pub enum ChartType {
     Bubble,
     Pie,
     Doughnut,
+    Radar,
+    PolarArea,
 }
 
 impl ChartType {
@@ -37,6 +39,8 @@ impl ChartType {
             "bubble" => Some(Self::Bubble),
             "pie" => Some(Self::Pie),
             "doughnut" => Some(Self::Doughnut),
+            "radar" => Some(Self::Radar),
+            "polarArea" => Some(Self::PolarArea),
             _ => None,
         }
     }
@@ -48,12 +52,24 @@ impl ChartType {
             Self::Bubble => "bubble",
             Self::Pie => "pie",
             Self::Doughnut => "doughnut",
+            Self::Radar => "radar",
+            Self::PolarArea => "polarArea",
         }
     }
 
     /// Controllers built on arc elements around a center, without cartesian scales.
     pub fn is_arc(self) -> bool {
         matches!(self, Self::Pie | Self::Doughnut)
+    }
+
+    /// Controllers on the radial linear scale.
+    pub fn is_radial(self) -> bool {
+        matches!(self, Self::Radar | Self::PolarArea)
+    }
+
+    /// Controllers on x/y cartesian scales.
+    pub fn is_cartesian(self) -> bool {
+        !self.is_arc() && !self.is_radial()
     }
 
     /// Controllers built on point elements (line, scatter, bubble).

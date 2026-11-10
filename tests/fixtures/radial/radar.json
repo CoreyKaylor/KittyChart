@@ -1,0 +1,11 @@
+{
+  "_kc": { "width": 420, "height": 380 },
+  "type": "radar",
+  "data": {
+    "labels": ["Eating", "Drinking", "Sleeping", "Designing", "Coding", "Cycling", "Running"],
+    "datasets": [
+      { "label": "First", "data": [65, 59, 90, 81, 56, 55, 40], "fill": false },
+      { "label": "Second", "data": [28, 48, 40, 19, 96, 27, 100], "fill": false }
+    ]
+  }
+}

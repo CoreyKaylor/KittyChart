@@ -71,7 +71,7 @@ impl Theme {
         let dark = luminance(bg) < 0.18;
         let fg = t.foreground;
         let (series, source) = match t.palette.as_ref().and_then(|p| terminal_series(p, bg, dark)) {
-            Some(s) => (s, PaletteSource::Terminal),
+            Some(s) => (extend_series(s, bg, dark), PaletteSource::Terminal),
             None => (reference(dark), PaletteSource::Reference),
         };
         Theme {
@@ -124,7 +124,13 @@ impl Theme {
         json!({
             "grid": { "color": css(self.grid) },
             "border": { "color": css(self.axis) },
-            "ticks": { "color": css(self.ink_secondary) },
+            "ticks": {
+                "color": css(self.ink_secondary),
+                // Radial tick labels sit on a backdrop; Chart.js's is translucent white.
+                "backdropColor": format!("rgba({}, {}, {}, 0.75)", self.surface[0], self.surface[1], self.surface[2])
+            },
+            "angleLines": { "color": css(self.grid) },
+            "pointLabels": { "color": css(self.ink_secondary) },
             "title": { "color": css(self.ink_secondary) }
         })
     }
@@ -155,6 +161,42 @@ pub fn parse_hex(s: &str) -> Option<Rgb> {
     }
     let p = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
     Some([p(0)?, p(2)?, p(4)?])
+}
+
+/// Terminal palettes give 4–6 usable hues. Categorical colors must never cycle, so extend a
+/// short palette with reference colors that are clearly distinct from every color already in it
+/// (normal-vision ΔE ≥ 15) and keep 3:1 contrast on this surface.
+fn extend_series(mut series: Vec<Rgb>, bg: Rgb, dark: bool) -> Vec<Rgb> {
+    let (lo, hi) = if dark { (0.48, 0.67) } else { (0.43, 0.77) };
+    for c in reference(dark) {
+        if series.len() >= 8 {
+            break;
+        }
+        // Snap-to-passing: hold hue, step lightness toward contrast until it reaches 3:1.
+        let Some(c) = snap_for_contrast(c, bg, dark, lo, hi) else { continue };
+        if series.iter().all(|s| delta_e(*s, c, None) >= 15.0) {
+            series.push(c);
+        }
+    }
+    series
+}
+
+/// Move `c`'s OKLCH lightness (hue held) away from the surface until it has 3:1 contrast,
+/// staying inside the band. `None` if the band runs out first.
+fn snap_for_contrast(c: Rgb, bg: Rgb, dark: bool, lo: f64, hi: f64) -> Option<Rgb> {
+    let mut cur = c;
+    for _ in 0..40 {
+        if contrast(cur, bg) >= 3.0 {
+            return Some(cur);
+        }
+        let l = oklch(cur).0;
+        let next = if dark { l + 0.01 } else { l - 0.01 };
+        if !(lo..=hi).contains(&next) {
+            return None;
+        }
+        cur = set_lightness(cur, next);
+    }
+    None
 }
 
 /// Snap each ANSI hue family into the mode's lightness band (holding its hue: the
@@ -247,9 +289,14 @@ fn permute(v: &mut Vec<usize>, k: usize, f: &mut dyn FnMut(&[usize])) {
 /// Hold hue and chroma, clamp OKLCH lightness into `[lo, hi]`, and reduce chroma until the
 /// result is inside sRGB.
 fn snap_lightness(c: Rgb, lo: f64, hi: f64) -> Rgb {
-    let [l, a, b] = oklab_lin(lin(c));
+    let l = oklab_lin(lin(c))[0];
     // Aim slightly inside the band so 8-bit rounding can't push it out.
-    let target = l.clamp(lo + 0.005, hi - 0.005);
+    set_lightness(c, l.clamp(lo + 0.005, hi - 0.005))
+}
+
+/// Hold hue, set OKLCH lightness to `target`, and reduce chroma until it fits in sRGB.
+fn set_lightness(c: Rgb, target: f64) -> Rgb {
+    let [_, a, b] = oklab_lin(lin(c));
     let (h, mut ch) = (b.atan2(a), a.hypot(b));
     loop {
         let rgb = oklab_to_lin([target, ch * h.cos(), ch * h.sin()]);
@@ -411,7 +458,11 @@ mod tests {
         });
         assert!(t.dark);
         assert_eq!(t.source, PaletteSource::Terminal);
-        assert!(t.series.len() >= 4);
+        assert!(t.series.len() >= 6, "short terminal palettes are extended: {:?}", t.series);
+        // Neighbors stay distinguishable; appended colors are distinct from everything.
+        for w in t.series.windows(2) {
+            assert!(delta_e(w[0], w[1], None) >= 15.0, "adjacent colors distinguishable");
+        }
         assert!(t.series.iter().all(|c| contrast(*c, t.surface) >= 3.0));
         assert!(contrast(t.ink_secondary, t.surface) >= 4.5);
         assert!(t.series.iter().all(|c| contrast(mix(*c, t.surface, t.fill_alpha), t.surface) >= 3.0));
@@ -438,6 +489,30 @@ mod tests {
             palette: Some(pal),
         });
         assert_eq!(t2.source, PaletteSource::Reference);
+    }
+
+    #[test]
+    fn short_light_palette_is_extended_without_repeats() {
+        let pal = [
+            "#24292f", "#cf222e", "#116329", "#4d2d00", "#0969da", "#8250df", "#1b7c83", "#6e7781",
+            "#57606a", "#a40e26", "#1a7f37", "#633c01", "#218bff", "#a475f9", "#3192aa", "#8c959f",
+        ]
+        .map(h);
+        let t = Theme::from_terminal(&TerminalColors {
+            background: h("#ffffff"),
+            foreground: h("#1f2328"),
+            palette: Some(pal),
+        });
+        assert!(t.series.len() >= 6, "{:?}", t.series);
+        assert!(t.series.iter().all(|c| contrast(*c, t.surface) >= 3.0));
+        let n = t.series.len();
+        for i in 0..n {
+            for j in i + 1..n {
+                if i >= 4 || j >= 4 {
+                    assert!(delta_e(t.series[i], t.series[j], None) >= 15.0, "{i} {j}");
+                }
+            }
+        }
     }
 
     #[test]

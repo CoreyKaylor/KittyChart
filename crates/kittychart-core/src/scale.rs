@@ -1867,7 +1867,7 @@ pub fn generate_ticks(o: &TickGen, rmin: f64, rmax: f64) -> Vec<f64> {
     ticks
 }
 
-fn relative_label_size(value: f64, min_spacing: f64, o: &TickGen) -> f64 {
+pub(crate) fn relative_label_size(value: f64, min_spacing: f64, o: &TickGen) -> f64 {
     let rad = to_radians(o.min_rotation);
     let mut ratio = if o.horizontal { rad.sin() } else { rad.cos() };
     if ratio == 0.0 {

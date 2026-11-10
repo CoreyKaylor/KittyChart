@@ -1,0 +1,12 @@
+{
+  "_kc": { "width": 560, "height": 280 },
+  "type": "line",
+  "data": {
+    "labels": ["a", "b", "c", "d", "e", "f"],
+    "datasets": [
+      { "label": "to end", "data": [80, 70, 85, 60, 75, 90], "fill": "end" },
+      { "label": "to 40", "data": [55, 30, 45, 25, 60, 35], "fill": { "value": 40 }, "stepped": true },
+      { "label": "to start", "data": [15, 20, 10, 18, 5, 12], "fill": "start" }
+    ]
+  }
+}
