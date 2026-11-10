@@ -47,6 +47,7 @@ def render(chart: Any, console: Any, options: Any) -> Iterator[Segment]:
             chart._json,
             info,
             _show_options("kitty", cols=cols, rows=rows, placeholders=True, image_id=chart._inline_image_id()),
+            chart._dispatch,
         )
         yield Segment(p.data[: p.graphics_len].decode("ascii"), None, _CONTROL)
         style = Style(color=Color.from_rgb(*_native.placeholder_color(p.image_id)))
@@ -61,7 +62,7 @@ def render(chart: Any, console: Any, options: Any) -> Iterator[Segment]:
         # the chart's cells as blank lines (Rich lays those out like any text, scrolling as
         # needed), then at the end of the last line jump back to the block's top-left, draw the
         # image over the blanks and restore the cursor. Text written afterwards never covers it.
-        p = _native.prepare_for(chart._json, info, _show_options("sixel", cols=cols, rows=rows))
+        p = _native.prepare_for(chart._json, info, _show_options("sixel", cols=cols, rows=rows), chart._dispatch)
         blank = Segment(" " * p.cols)
         for i in range(p.rows):
             if i:
@@ -73,6 +74,6 @@ def render(chart: Any, console: Any, options: Any) -> Iterator[Segment]:
         return
 
     colors = info["colors"] if info else None
-    ansi = _native.render_text(chart._json, cols, rows, text_mode, colors)
+    ansi = _native.render_text(chart._json, cols, rows, text_mode, colors, chart._dispatch)
     text = Text.from_ansi(ansi.rstrip("\r\n").replace("\r\n", "\n"), no_wrap=True, overflow="crop")
     yield from text.__rich_console__(console, options)

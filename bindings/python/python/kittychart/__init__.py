@@ -9,7 +9,7 @@
 widget, and in IPython displaying a chart draws it (Jupyter shows the PNG).
 """
 
-from ._chart import Chart, probe, show, terminal_info
+from ._chart import Chart, Context, probe, show, terminal_info
 from ._native import __version__
 
-__all__ = ["Chart", "show", "probe", "terminal_info", "__version__"]
+__all__ = ["Chart", "Context", "show", "probe", "terminal_info", "__version__"]

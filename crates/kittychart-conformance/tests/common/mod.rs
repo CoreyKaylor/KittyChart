@@ -105,6 +105,20 @@ pub fn run_geometry(
     keys: &[Key],
     snapshot_ms: Option<u64>,
 ) -> Run {
+    run_full(argv, &[], cols, rows, graphics, keys, snapshot_ms)
+}
+
+/// [`run_geometry`] with extra environment variables.
+pub fn run_full(
+    argv: &[String],
+    env: &[(&str, &str)],
+    cols: u16,
+    rows: u16,
+    graphics: bool,
+    keys: &[Key],
+    snapshot_ms: Option<u64>,
+) -> Run {
+    let env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let (mut term, replies) = answering_terminal(cols, rows, CW, CH, &Colors::default());
     if !graphics {
         term.set_kitty_image_storage_limit(0).unwrap();
@@ -113,7 +127,7 @@ pub fn run_geometry(
         &mut term,
         &replies,
         argv,
-        &[],
+        &env,
         (cols, rows, CW, CH),
         keys,
         snapshot_ms.map(Duration::from_millis),
@@ -235,4 +249,20 @@ pub fn assert_whole_images(t: &Terminal<'_, '_>, placed: &[Placed]) {
             }
         }
     }
+}
+
+/// The pixels of kitty image `id` (RGBA, as the terminal stored them).
+pub fn image_rgba(t: &Terminal<'_, '_>, id: u32) -> Option<(u32, u32, Vec<u8>)> {
+    let g = t.kitty_graphics().ok()?;
+    let img = g.image(id)?;
+    Some((img.width().ok()?, img.height().ok()?, img.data().ok()?.to_vec()))
+}
+
+/// Pixels within `tol` of `rgb` (opaque or not) in an RGBA buffer.
+pub fn count_color(rgba: &[u8], rgb: [u8; 3], tol: i32) -> usize {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] > 0 && (0..3).all(|i| (i32::from(p[i]) - i32::from(rgb[i])).abs() <= tol))
+        .count()
 }

@@ -1,8 +1,10 @@
-"""A Textual dashboard with two charts. Press space to change the data, q to quit.
+"""A Textual dashboard with two charts: hover for tooltips, click a legend item to hide a
+series, space animates to new data, q quits.
 
     uv run python examples/textual_dashboard.py
 """
 
+import os
 import random
 
 from textual.app import App, ComposeResult
@@ -11,6 +13,9 @@ from textual.widgets import Footer, Header
 
 import kittychart
 from kittychart.textual import ChartWidget  # import before app.run(): probes the terminal
+
+# A fixed seed gives the same data every run (the tests use it); unset, it's random.
+random.seed(os.environ.get("KITTYCHART_EXAMPLE_SEED"))
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -36,7 +41,7 @@ def line() -> kittychart.Chart:
             "labels": DAYS,
             "datasets": [{"label": "Latency (ms)", "data": [random.uniform(80, 240) for _ in DAYS], "fill": True}],
         },
-        options={"maintainAspectRatio": False},
+        options={"maintainAspectRatio": False, "interaction": {"mode": "index", "intersect": False}},
     )
 
 

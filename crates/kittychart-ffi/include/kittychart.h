@@ -13,6 +13,14 @@
 // [`kc_chart_free`].
 typedef struct kc_chart kc_chart;
 
+// A callback for scriptable options: `fn(id, context_json, user) -> result_json`.
+//
+// Wherever the config holds `{"__kc_fn": "<id>"}`, the library calls this with that id and
+// the option's context as JSON (Chart.js's context object; positional arguments such as
+// `ticks.callback`'s are in `"__args"`). Return the option's value as NUL-terminated JSON
+// (e.g. `"\"red\""`, `"12"`), valid until the next call; or NULL for undefined.
+typedef const char *(*kc_dispatch_fn)(const char *id, const char *context_json, void *user);
+
 // Options for [`kc_render_png`] and [`kc_render_rgba`].
 typedef struct kc_render_options {
   // Logical (CSS) width in pixels. 0: 800.
@@ -65,6 +73,14 @@ typedef struct kc_show_options {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+// Call `f` for scriptable options (see [`kc_dispatch_fn`]); NULL removes it. `user` is
+// passed through to every call.
+//
+// # Safety
+// `chart` is valid. `f` and `user` stay valid while the chart renders, and may be called
+// from the thread that calls the render functions.
+int kc_chart_set_dispatch(struct kc_chart *chart, kc_dispatch_fn f, void *user);
 
 // Parse a Chart.js configuration (`{"type", "data", "options"}`) from NUL-terminated UTF-8
 // JSON. Returns NULL on error (see [`kc_last_error`]).
@@ -125,7 +141,8 @@ int kc_render_text(const struct kc_chart *chart,
 
 // Draw the chart in the terminal at the cursor, leaving the cursor below it: detects kitty
 // graphics, sixel and the terminal's colors, falling back to text. Writes to stdout, or to
-// the controlling terminal when stdout is redirected. Unix only (elsewhere it returns -1).
+// the controlling terminal when stdout is redirected. Unix and Windows (Windows is
+// unverified); elsewhere it returns -1.
 //
 // # Safety
 // `chart` is valid; `opts` is NULL or valid, with valid strings.

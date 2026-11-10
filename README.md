@@ -3,13 +3,15 @@
 Chart.js-class charts for graphics-capable terminals (kitty, Ghostty and other libghostty
 terminals, WezTerm, …), from a Rust core with Python, Node and C bindings.
 
-> Status: **M4 complete**: line, bar, scatter, bubble, pie, doughnut, radar and polar area
+> Status: **v2 (interactivity)**: line, bar, scatter, bubble, pie, doughnut, radar and polar area
 > charts; category, linear, logarithmic, time, timeseries and radial scales; stacking, floating
 > and horizontal bars; area fills; decimation; title/subtitle/legend; terminal-native colors.
 > Output via kitty graphics (direct or Unicode placeholders, tmux passthrough), sixel, or text
-> (block and Braille characters). Bindings: Python (numpy/pandas/polars, Rich, Textual,
-> IPython/Jupyter), Node.js/Bun/Deno, C, and a ratatui widget. Docs: [docs/](docs/index.md),
-> with a [gallery](docs/gallery.md).
+> (block and Braille characters), or PNG and SVG. Scriptable options, gradients and segment
+> styles; hover, tooltips, legend toggles and animations in an interactive viewer and the TUI
+> widgets. Bindings: Python (numpy/pandas/polars, Rich, Textual, IPython/Jupyter),
+> Node.js/Bun/Deno, C, and a ratatui widget. Docs: [docs/](docs/index.md), with a
+> [gallery](docs/gallery.md).
 
 ```python
 import kittychart                                   # pip install kittychart
@@ -26,6 +28,7 @@ cargo run -p kittychart-cli -- tests/fixtures/line/basic.json          # draw in
 cargo run -p kittychart-cli -- chart.json --out chart.png --scale 2   # or render a PNG
 echo '{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[3,5]}]}}' | cargo run -p kittychart-cli
 cargo run -p kittychart-cli -- chart.json --protocol text             # no graphics? block + Braille text
+cargo run -p kittychart-cli -- view chart.json --watch                # interactive: hover, legend clicks, live file
 ```
 
 `--protocol auto` (the default, or `$KITTYCHART_PROTOCOL`) asks the terminal what it supports
@@ -49,7 +52,7 @@ cascading, colors plugin palette and layout rules.
 | `bindings/python` | The `kittychart` Python package (PyO3, abi3 wheels): numpy/pandas/polars, Rich, Textual, IPython |
 | `bindings/node` | The `kittychart` npm package (napi-rs): Node.js, Bun, Deno; typings compatible with Chart.js |
 | `kittychart-canvas` | Canvas2D-shaped drawing API: tiny-skia raster, cosmic-text shaping, bundled Inter |
-| `kittychart-term` | Sans-IO kitty (incl. placeholders, tmux) and sixel encoders, capability `Detector`, a small `/dev/tty` adapter |
+| `kittychart-term` | Sans-IO kitty (incl. placeholders, tmux, temp-file/shm media) and sixel encoders, capability `Detector`, input parser (SGR mouse, keys), a small terminal adapter (`/dev/tty`; Windows console, unverified) |
 | `kittychart-testkit` | Independent kitty and sixel decoders, golden-image assertions (test-only) |
 | `kittychart-conformance` | Tests against reference implementations: Ghostty's VT core (`libghostty-vt`, needs Zig), libsixel, tmux; and end-to-end runs of the CLI, the C, Python and Node bindings, Rich, Textual, IPython and ratatui on a PTY |
 
@@ -111,7 +114,8 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
   attached to a GitHub release;
 - abi3 wheels (manylinux, musllinux, macOS, Windows) and an sdist go to PyPI by trusted
   publishing;
-- the npm package goes out with one prebuilt native package per platform.
+- the npm package goes out with one prebuilt native package per platform (including musl
+  Linux, cross-built with zig and tested in an Alpine container).
 
 Bump the version in `Cargo.toml` and `bindings/node/package.json` first. `docs/` is published to
 GitHub Pages by `.github/workflows/pages.yml`.

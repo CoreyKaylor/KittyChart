@@ -1318,6 +1318,7 @@ dependencies = [
 name = "kittychart-conformance"
 version = "0.0.1"
 dependencies = [
+ "base64 0.23.1",
  "kittychart",
  "kittychart-term",
  "kittychart-testkit",
@@ -1346,6 +1347,7 @@ dependencies = [
  "cbindgen",
  "kittychart",
  "kittychart-testkit",
+ "serde_json",
 ]
 
 [[package]]
@@ -1356,6 +1358,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "serde_json",
 ]
 
 [[package]]
@@ -1378,6 +1381,7 @@ version = "0.0.1"
 dependencies = [
  "kittychart",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]
@@ -1404,6 +1408,7 @@ dependencies = [
  "kittychart-testkit",
  "proptest",
  "rustix",
+ "windows-sys",
 ]
 
 [[package]]

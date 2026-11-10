@@ -36,6 +36,14 @@ theme (`colors: 'chartjs'` to opt out).
 - **TUI frameworks**: `probe()` once, then `chart.prepare(info, { placeholders: true })` returns
   the escapes (`data.subarray(0, graphicsLen)`) and placeholder text to place in your layout.
 - `update({ options, data })` merges changes; `toRgba()` returns raw pixels.
+- **Functions as options**: wherever Chart.js takes a function, pass one. It gets Chart.js's
+  context (`ctx.raw`, `ctx.dataIndex` …); tick callbacks get `(value, index, ticks)`:
+  `backgroundColor: (ctx) => (ctx.raw > 10 ? 'red' : 'blue')`.
+- **`interact(opts)`**: explore the chart full-screen until `q`: hover for tooltips, click
+  legend items to hide datasets, arrows to step, `r` replays the animation, `s` saves a PNG.
+  `{ watch: 'chart.json' }` animates to that file's contents when it changes. Blocks.
 
-Works in Node.js ≥ 18, Bun and Deno (`deno run -A`). Terminal detection needs a Unix terminal.
-On Windows, `show()` draws text, and PNG/RGBA rendering works everywhere.
+Works in Node.js ≥ 18, Bun and Deno (`deno run -A`), with prebuilt modules for Linux (glibc and
+musl, x64 and arm64), macOS and Windows. Terminal detection on Windows (console
+virtual-terminal mode) is built but not yet tried in a real Windows terminal. PNG, SVG and RGBA
+rendering work everywhere.

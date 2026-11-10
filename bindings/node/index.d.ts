@@ -17,7 +17,8 @@ export type DataValues = ArrayLike<unknown> | readonly unknown[]
 
 /**
  * A Chart.js configuration. Structurally compatible with Chart.js's `ChartConfiguration`, so
- * configs typed for Chart.js can be passed as they are.
+ * configs typed for Chart.js can be passed as they are. Options may be functions
+ * (scriptable options), called with Chart.js's context object.
  */
 export interface ChartConfiguration {
   type: ChartType
@@ -134,6 +135,22 @@ export class Chart {
   show(opts?: ShowOptions): Shown
   /** Render for a known terminal without I/O (for TUI frameworks). */
   prepare(info: TerminalInfo, opts?: ShowOptions): Prepared
+  /**
+   * Explore the chart full-screen until `q` (hover, legend clicks, arrows, `r`, `s`).
+   * Blocks. Unix terminals.
+   */
+  interact(opts?: InteractOptions): void
+}
+
+export interface InteractOptions {
+  protocol?: Protocol
+  scale?: number
+  background?: string
+  colors?: 'terminal' | 'chartjs'
+  /** Use temp files / shared memory for frames when the terminal can (default true). */
+  fastTransfer?: boolean
+  /** Follow this JSON file: animate to its contents when it changes. */
+  watch?: string
 }
 
 /** Draw a Chart.js config in the terminal. */

@@ -81,7 +81,7 @@ impl Script {
         let r = match self.inner.named.get(id) {
             Some(f) => f(ctx),
             None => match &self.inner.dispatch {
-                Some(d) => d(id, ctx),
+                Some(d) => d(id, &js_numbers(ctx)),
                 None => Err("no such function".into()),
             },
         };
@@ -127,4 +127,42 @@ pub fn has_fns(v: &Value) -> bool {
 /// A function marker value.
 pub fn marker(id: &str) -> Value {
     serde_json::json!({ FN_KEY: id })
+}
+
+/// JavaScript has one number type, so a whole number crosses into another language as an
+/// integer: Python's `f"${value}"` then prints `$15`, as Chart.js does, not `$15.0`.
+fn js_numbers(v: &Value) -> Value {
+    match v {
+        Value::Number(n) => match n.as_f64() {
+            Some(f) if n.is_f64() && f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 => {
+                Value::from(f as i64)
+            }
+            _ => v.clone(),
+        },
+        Value::Array(a) => Value::Array(a.iter().map(js_numbers).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), js_numbers(v))).collect()),
+        _ => v.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn whole_numbers_reach_other_languages_as_integers() {
+        let seen = Arc::new(Mutex::new(Value::Null));
+        let s = seen.clone();
+        let script = Script::new(move |_, ctx| {
+            *s.lock().unwrap() = ctx.clone();
+            Ok(Value::Null)
+        });
+        script.call("f", &json!({"__args": [15.0, 2, [{"value": -3.0}, {"value": 2.5}]], "big": 1e300}));
+        assert_eq!(
+            seen.lock().unwrap().to_string(),
+            r#"{"__args":[15,2,[{"value":-3},{"value":2.5}]],"big":1e+300}"#
+        );
+    }
 }

@@ -24,6 +24,89 @@ use kittychart::{CellMode, ChartConfig, Color, RenderOptions};
 #[derive(Debug)]
 pub struct kc_chart {
     config: ChartConfig,
+    /// Set by [`kc_chart_set_dispatch`]: calls the C callback for scriptable options.
+    script: Option<kittychart::script::Script>,
+}
+
+impl kc_chart {
+    /// The config for one render, with the dispatcher attached.
+    fn render_config(&self) -> ChartConfig {
+        match &self.script {
+            Some(s) => self.config.clone().with_script(s.clone()),
+            None => self.config.clone(),
+        }
+    }
+
+    /// The first callback error since the last call, as an error.
+    fn check(&self) -> Result<(), String> {
+        match self.script.as_ref().map(kittychart::script::Script::take_errors).unwrap_or_default().first() {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        }
+    }
+}
+
+/// A callback for scriptable options: `fn(id, context_json, user) -> result_json`.
+///
+/// Wherever the config holds `{"__kc_fn": "<id>"}`, the library calls this with that id and
+/// the option's context as JSON (Chart.js's context object; positional arguments such as
+/// `ticks.callback`'s are in `"__args"`). Return the option's value as NUL-terminated JSON
+/// (e.g. `"\"red\""`, `"12"`), valid until the next call; or NULL for undefined.
+pub type kc_dispatch_fn = Option<
+    unsafe extern "C" fn(
+        id: *const c_char,
+        context_json: *const c_char,
+        user: *mut std::ffi::c_void,
+    ) -> *const c_char,
+>;
+
+/// A C callback and its user pointer.
+struct CDispatch {
+    f: unsafe extern "C" fn(*const c_char, *const c_char, *mut std::ffi::c_void) -> *const c_char,
+    user: *mut std::ffi::c_void,
+}
+
+// SAFETY: the caller of `kc_chart_set_dispatch` promises the callback and `user` may be used
+// from the thread that renders the chart; renders run synchronously on the calling thread.
+unsafe impl Send for CDispatch {}
+unsafe impl Sync for CDispatch {}
+
+impl CDispatch {
+    fn call(&self, id: &str, ctx: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let id = CString::new(id).map_err(|e| e.to_string())?;
+        let ctx = CString::new(ctx.to_string()).map_err(|e| e.to_string())?;
+        // SAFETY: per `kc_chart_set_dispatch`'s contract.
+        let r = unsafe { (self.f)(id.as_ptr(), ctx.as_ptr(), self.user) };
+        if r.is_null() {
+            return Ok(serde_json::Value::Null);
+        }
+        // SAFETY: the callback returns a NUL-terminated string valid until its next call.
+        let text = unsafe { CStr::from_ptr(r) }.to_str().map_err(|e| e.to_string())?;
+        serde_json::from_str(text).map_err(|e| format!("callback returned invalid JSON: {e}"))
+    }
+}
+
+/// Call `f` for scriptable options (see [`kc_dispatch_fn`]); NULL removes it. `user` is
+/// passed through to every call.
+///
+/// # Safety
+/// `chart` is valid. `f` and `user` stay valid while the chart renders, and may be called
+/// from the thread that calls the render functions.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_chart_set_dispatch(
+    chart: *mut kc_chart,
+    f: kc_dispatch_fn,
+    user: *mut std::ffi::c_void,
+) -> c_int {
+    guard(|| {
+        // SAFETY: caller contract.
+        let chart = unsafe { chart.as_mut() }.ok_or("chart is NULL")?;
+        chart.script = f.map(|f| {
+            let d = CDispatch { f, user };
+            kittychart::script::Script::new(move |id, ctx| d.call(id, ctx))
+        });
+        Ok(())
+    })
 }
 
 /// Bytes owned by the library. Free with [`kc_bytes_free`].
@@ -150,7 +233,7 @@ pub unsafe extern "C" fn kc_chart_from_json(json: *const c_char) -> *mut kc_char
         // SAFETY: forwarded caller contract.
         let json = unsafe { opt_str(json, "json") }?.ok_or("json is NULL")?;
         let config = ChartConfig::from_json(json).map_err(|e| e.to_string())?;
-        out = Box::into_raw(Box::new(kc_chart { config }));
+        out = Box::into_raw(Box::new(kc_chart { config, script: None }));
         Ok(())
     });
     out
@@ -214,7 +297,9 @@ pub unsafe extern "C" fn kc_render_png(
             unsafe { (chart.as_ref().ok_or("chart is NULL")?, out.as_mut().ok_or("out is NULL")?) };
         // SAFETY: caller contract.
         let r = unsafe { render_options(opts) }?;
-        *out = bytes(kittychart::render(chart.config.clone(), &r).to_png());
+        let png = kittychart::render(chart.render_config(), &r).to_png();
+        chart.check()?;
+        *out = bytes(png);
         Ok(())
     })
 }
@@ -236,7 +321,9 @@ pub unsafe extern "C" fn kc_render_svg(
             unsafe { (chart.as_ref().ok_or("chart is NULL")?, out.as_mut().ok_or("out is NULL")?) };
         // SAFETY: caller contract.
         let r = unsafe { render_options(opts) }?;
-        *out = bytes(kittychart::render_svg(chart.config.clone(), &r).into_bytes());
+        let svg = kittychart::render_svg(chart.render_config(), &r);
+        chart.check()?;
+        *out = bytes(svg.into_bytes());
         Ok(())
     })
 }
@@ -257,7 +344,8 @@ pub unsafe extern "C" fn kc_render_rgba(
             unsafe { (chart.as_ref().ok_or("chart is NULL")?, out.as_mut().ok_or("out is NULL")?) };
         // SAFETY: caller contract.
         let r = unsafe { render_options(opts) }?;
-        let img = kittychart::render(chart.config.clone(), &r);
+        let img = kittychart::render(chart.render_config(), &r);
+        chart.check()?;
         *out = kc_image { width: img.width, height: img.height, rgba: bytes(img.rgba) };
         Ok(())
     })
@@ -291,12 +379,13 @@ pub unsafe extern "C" fn kc_render_text(
         };
         let rows = (rows > 0).then_some(rows);
         let r = kittychart::terminal::render_cells_for_terminal(
-            chart.config.clone(),
+            chart.render_config(),
             cols.max(1),
             rows,
             mode,
             None,
         );
+        chart.check()?;
         *out = bytes(r.bytes);
         Ok(())
     })
@@ -304,7 +393,8 @@ pub unsafe extern "C" fn kc_render_text(
 
 /// Draw the chart in the terminal at the cursor, leaving the cursor below it: detects kitty
 /// graphics, sixel and the terminal's colors, falling back to text. Writes to stdout, or to
-/// the controlling terminal when stdout is redirected. Unix only (elsewhere it returns -1).
+/// the controlling terminal when stdout is redirected. Unix and Windows (Windows is
+/// unverified); elsewhere it returns -1.
 ///
 /// # Safety
 /// `chart` is valid; `opts` is NULL or valid, with valid strings.
@@ -318,7 +408,7 @@ pub unsafe extern "C" fn kc_show(chart: *const kc_chart, opts: *const kc_show_op
     })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 unsafe fn show(chart: &kc_chart, o: Option<&kc_show_options>) -> Result<(), String> {
     use kittychart::show::{Mode, ShowOptions};
     let nz = |v: u16| (v > 0).then_some(v);
@@ -337,12 +427,13 @@ unsafe fn show(chart: &kc_chart, o: Option<&kc_show_options>) -> Result<(), Stri
         s.force = o.force;
         s.chartjs_colors = o.chartjs_colors;
     }
-    kittychart::show::show(chart.config.clone(), &s).map(drop).map_err(|e| e.to_string())
+    kittychart::show::show(chart.render_config(), &s).map(drop).map_err(|e| e.to_string())?;
+    chart.check()
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 unsafe fn show(_chart: &kc_chart, _o: Option<&kc_show_options>) -> Result<(), String> {
-    Err("drawing in the terminal is only supported on Unix for now; render a PNG instead".into())
+    Err("drawing in the terminal is only supported on Unix and Windows; render a PNG instead".into())
 }
 
 /// Free bytes returned by the library (including `kc_image.rgba`). A NULL `data` is ignored.

@@ -1,11 +1,11 @@
 //! Two charts in a ratatui layout: `cargo run -p kittychart-ratatui --example dashboard`.
-//! Uses kitty graphics when the terminal supports them, text cells otherwise. `q` quits,
-//! `space` changes the data.
+//! Uses kitty graphics when the terminal supports them, text cells otherwise. Hover for
+//! tooltips, click a legend item to hide that series; `space` animates to new data, `q` quits.
 
 use std::io::Write;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, MouseButton, MouseEventKind};
 use kittychart::{ChartConfig, TerminalColors};
 use kittychart_canvas::cells::CellMode;
 use kittychart_ratatui::{ChartState, ChartWidget, Graphics};
@@ -30,7 +30,8 @@ fn line(seed: u64) -> ChartConfig {
         r#"{{"type":"line","data":{{"labels":{labels:?},"datasets":[
             {{"label":"p50 ms","data":{a:?},"tension":0.3,"pointRadius":0}},
             {{"label":"p99 ms","data":{b:?},"tension":0.3,"pointRadius":0}}]}},
-            "options":{{"maintainAspectRatio":false}}}}"#
+            "options":{{"maintainAspectRatio":false,
+                "interaction":{{"mode":"index","intersect":false}}}}}}"#
     ))
     .unwrap()
 }
@@ -54,16 +55,23 @@ fn main() -> std::io::Result<()> {
     });
 
     let mut terminal = ratatui::init();
+    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
     let (mut s1, mut s2) = (ChartState::new(1), ChartState::new(2));
     let mut seed = 1;
+    let start = std::time::Instant::now();
     let result = loop {
+        let now = start.elapsed().as_secs_f64() * 1000.0;
+        s1.set_time(now);
+        s2.set_time(now);
         let (bar, line) = (bar(seed), line(seed));
         let drawn = terminal.draw(|f| {
             let [top, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(f.area());
             let [left, right] =
                 Layout::horizontal([Constraint::Percentage(40), Constraint::Fill(1)]).areas(body);
             f.render_widget(
-                Paragraph::new(format!("KittyChart + ratatui ({graphics:?})  q quit, space refresh")),
+                Paragraph::new(format!(
+                    "KittyChart + ratatui ({graphics:?})  hover · click legend · space new data · q quit"
+                )),
                 top,
             );
             for (area, cfg, state, title) in
@@ -90,12 +98,33 @@ fn main() -> std::io::Result<()> {
             }
         }
         out.flush()?;
+        // While a chart animates, draw again soon; otherwise wait for input.
+        let animating = s1.is_animating() || s2.is_animating();
+        if !event::poll(Duration::from_millis(if animating { 16 } else { 1000 }))? {
+            continue;
+        }
         match event::read()? {
             Event::Key(k) if k.code == KeyCode::Char('q') => break Ok(()),
             Event::Key(k) if k.code == KeyCode::Char(' ') => seed += 1,
+            Event::Mouse(m) => match m.kind {
+                MouseEventKind::Moved => {
+                    for s in [&mut s1, &mut s2] {
+                        if !s.handle_mouse(m.column, m.row) {
+                            s.clear_hover();
+                        }
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    for s in [&mut s1, &mut s2] {
+                        s.handle_click(m.column, m.row);
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
     };
+    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
     if matches!(graphics, Graphics::Kitty { .. }) {
         let mut out = std::io::stdout();

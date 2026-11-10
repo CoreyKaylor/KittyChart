@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
+
+#[cfg(any(unix, windows))]
+mod view;
 use kittychart::{ChartConfig, RenderOptions};
 
 /// Render a Chart.js configuration (JSON) as a chart in your terminal, or to a PNG file.
@@ -58,6 +61,11 @@ struct Args {
     #[arg(long)]
     force: bool,
 
+    /// Redraw in place whenever the file changes (Ctrl-C to stop). For hover, tooltips and
+    /// animation, use `kittychart view FILE --watch`.
+    #[arg(long, requires = "file")]
+    watch: bool,
+
     /// Default colors: `terminal` derives them from your terminal theme; `chartjs` uses
     /// Chart.js's defaults (made for white pages).
     #[arg(long, default_value = "terminal", value_parser = ["terminal", "chartjs"])]
@@ -66,6 +74,17 @@ struct Args {
 
 const PROTOCOLS: [&str; 7] = ["auto", "kitty", "sixel", "text", "blocks", "half", "braille"];
 fn main() -> ExitCode {
+    #[cfg(any(unix, windows))]
+    if std::env::args().nth(1).as_deref() == Some("view") {
+        let argv = std::iter::once("kittychart view".to_owned()).chain(std::env::args().skip(2)).collect();
+        return match view::run(argv) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("kittychart: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match run(Args::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -115,12 +134,12 @@ fn run(args: Args) -> Result<(), String> {
     display(config, &args, background)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn display(_config: ChartConfig, _args: &Args, _background: Option<kittychart::Color>) -> Result<(), String> {
-    Err("drawing in the terminal is only supported on Unix for now; use --out FILE.png".into())
+    Err("drawing in the terminal is only supported on Unix and Windows; use --out FILE.png".into())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn display(config: ChartConfig, args: &Args, background: Option<kittychart::Color>) -> Result<(), String> {
     use kittychart::show::{Mode, ShowOptions, show};
 
@@ -141,7 +160,38 @@ fn display(config: ChartConfig, args: &Args, background: Option<kittychart::Colo
         chartjs_colors: args.colors == "chartjs",
         image_id: None,
     };
-    show(config, &opts).map(drop).map_err(|e| e.to_string())
+    if !args.watch {
+        return show(config, &opts).map(drop).map_err(|e| e.to_string());
+    }
+    // --watch: draw, then redraw over the same lines (and the same kitty image) on changes.
+    let path = args.file.clone().unwrap_or_default();
+    let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let opts = ShowOptions { image_id: Some(kittychart::show::next_image_id()), ..opts };
+    let mut shown = show(config, &opts).map_err(|e| e.to_string())?;
+    let mut last = mtime(&path);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let m = mtime(&path);
+        if m == last {
+            continue;
+        }
+        last = m;
+        let Ok(json) = std::fs::read_to_string(&path) else { continue };
+        let config = match ChartConfig::from_json(&json) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("kittychart: {}: {e}", path.display());
+                continue;
+            }
+        };
+        let mut p = kittychart::show::prepare(config, &opts).map_err(|e| e.to_string())?;
+        // Back to the chart's first line, then draw over it.
+        let mut bytes = format!("\x1b[{}A\r", shown.rows).into_bytes();
+        bytes.append(&mut p.bytes);
+        p.bytes = bytes;
+        p.write().map_err(|e| e.to_string())?;
+        shown = p;
+    }
 }
 
 fn read_stdin() -> Result<String, String> {

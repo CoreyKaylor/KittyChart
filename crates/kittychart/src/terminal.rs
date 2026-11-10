@@ -122,6 +122,9 @@ pub fn render_for_terminal(config: ChartConfig, geom: TermGeometry, opts: &TermO
                 );
                 bytes.push(b'\r');
             } else {
+                // A fixed placement id: drawing the same image id again (a live redraw)
+                // replaces this placement instead of adding one.
+                t.placement_id = Some(1);
                 kitty::transmit_and_display(image.as_term_image(), &t, &mut bytes);
             }
         }

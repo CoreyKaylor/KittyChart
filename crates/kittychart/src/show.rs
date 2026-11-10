@@ -4,8 +4,9 @@
 //! This is the one place in the facade that does I/O (through `kittychart_term::tty`). The
 //! CLI and every language binding go through it, so they all detect and fall back the same way.
 //!
-//! Detection needs a Unix terminal. Elsewhere (Windows for now) [`prepare`] draws text on
-//! stdout and [`probe`] returns `Unsupported`; [`prepare_for`] works everywhere.
+//! Detection needs a Unix terminal or the Windows console (Windows is unverified so far).
+//! Elsewhere [`prepare`] draws text on stdout and [`probe`] returns `Unsupported`;
+//! [`prepare_for`] works everywhere.
 //!
 //! ```no_run
 //! let config = kittychart::ChartConfig::from_json(r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#)?;
@@ -14,7 +15,7 @@
 //! ```
 
 use std::fmt;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::IsTerminal;
 use std::io::{self, Write};
 use std::str::FromStr;
@@ -22,9 +23,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use kittychart_canvas::cells::CellMode;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use kittychart_term::detect::Capabilities;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use kittychart_term::tty::{self, Tty};
 
 use crate::terminal::{Protocol, TermGeometry, TermOptions, render_cells_for_terminal, render_for_terminal};
@@ -142,7 +143,7 @@ pub struct TerminalInfo {
 }
 
 impl TerminalInfo {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn new(ws: tty::WindowSize, caps: Option<&Capabilities>) -> TerminalInfo {
         let (cell_width, cell_height) = ws
             .cell_px()
@@ -183,14 +184,14 @@ impl TerminalInfo {
 pub const PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Ask the controlling terminal (`/dev/tty`) for its size, graphics support and colors.
-/// Unsupported outside Unix.
-#[cfg(not(unix))]
+/// Unsupported outside Unix and Windows.
+#[cfg(not(any(unix, windows)))]
 pub fn probe(_timeout: Duration) -> io::Result<TerminalInfo> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "terminal detection needs a Unix terminal"))
+    Err(io::Error::new(io::ErrorKind::Unsupported, "terminal detection needs a Unix or Windows terminal"))
 }
 
 /// Ask the controlling terminal (`/dev/tty`) for its size, graphics support and colors.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub fn probe(timeout: Duration) -> io::Result<TerminalInfo> {
     let tty = Tty::open()?;
     let ws = tty.window_size()?;
@@ -232,9 +233,9 @@ impl Prepared {
                 out.write_all(&self.bytes)?;
                 out.flush()
             }
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             Target::Tty => Tty::open()?.write_all(&self.bytes),
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             Target::Tty => Err(io::Error::new(io::ErrorKind::Unsupported, "no /dev/tty")),
         }
     }
@@ -246,16 +247,16 @@ pub fn prepare(config: ChartConfig, opts: &ShowOptions) -> Result<Prepared, Show
         Some(m) => m,
         None => Mode::from_env()?.unwrap_or_default(),
     };
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     return match mode {
         Mode::Auto | Mode::Text(_) => Ok(text_on_stdout(config, mode, opts)),
-        _ => Err(ShowError::Usage("graphics need a Unix terminal for now; render a PNG instead".into())),
+        _ => Err(ShowError::Usage("graphics need a Unix or Windows terminal; render a PNG instead".into())),
     };
-    #[cfg(unix)]
-    prepare_unix(config, mode, opts)
+    #[cfg(any(unix, windows))]
+    prepare_tty(config, mode, opts)
 }
 
-/// No terminal to ask (a pipe, cron, CI, or not Unix): text, on stdout, `$COLUMNS` wide.
+/// No terminal to ask (a pipe, cron, CI, or another platform): text, on stdout, `$COLUMNS` wide.
 fn text_on_stdout(config: ChartConfig, mode: Mode, opts: &ShowOptions) -> Prepared {
     let cell = if let Mode::Text(c) = mode { c } else { CellMode::Auto };
     let cols = opts.cols.or_else(env_columns).unwrap_or(80).max(10);
@@ -271,8 +272,8 @@ fn text_on_stdout(config: ChartConfig, mode: Mode, opts: &ShowOptions) -> Prepar
     }
 }
 
-#[cfg(unix)]
-fn prepare_unix(config: ChartConfig, mode: Mode, opts: &ShowOptions) -> Result<Prepared, ShowError> {
+#[cfg(any(unix, windows))]
+fn prepare_tty(config: ChartConfig, mode: Mode, opts: &ShowOptions) -> Result<Prepared, ShowError> {
     let tty = match Tty::open() {
         Ok(t) => t,
         Err(_) if matches!(mode, Mode::Auto | Mode::Text(_)) => {

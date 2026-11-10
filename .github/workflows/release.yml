@@ -120,6 +120,9 @@ jobs:
           - { os: macos-15-intel, target: x86_64-apple-darwin }
           - { os: macos-latest, target: aarch64-apple-darwin }
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          # musl (Alpine): cross-built with zig, tested in an Alpine container.
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl, musl: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, musl: true }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -128,11 +131,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      - if: matrix.musl
+        uses: mlugg/setup-zig@v2
+        with: { version: 0.15.2 }
+      - if: matrix.musl
+        run: cargo install cargo-zigbuild --locked --version 0.24.1
       - run: npm ci --no-audit --no-fund
-      - run: npx napi build --platform --release --target ${{ matrix.target }} --js binding.js --dts binding.d.ts
-      - run: npm test
+      - run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.musl && '-x' || '' }} --js binding.js --dts binding.d.ts
+      - if: "!matrix.musl"
+        run: npm test
+      - if: matrix.musl
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" -w /repo/bindings/node node:22-alpine \
+            node --test __test__/chart.test.js
       - uses: actions/upload-artifact@v4
         with:
           name: node-${{ matrix.target }}

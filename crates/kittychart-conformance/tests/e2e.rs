@@ -136,3 +136,24 @@ fn tmux_placeholders_wider_than_the_diacritic_table() {
     assert_eq!(p[0].grid, (400, 20));
     assert_whole_images(&r.term, &p);
 }
+
+#[test]
+fn ratatui_dashboard_hover_adds_a_tooltip() {
+    let bin = built(&["-p", "kittychart-ratatui", "--example", "dashboard"], "examples/dashboard");
+    let tooltip = |rgba: &[u8]| {
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 150 && p[3] < 240 && p[0] < 10 && p[1] < 10 && p[2] < 10)
+            .count()
+    };
+    let still = run(std::slice::from_ref(&bin), true, &[], Some(2500));
+    let (_, _, before) = image_rgba(&still.term, 2).expect("chart 2");
+    // crossterm captures the mouse in SGR cell mode: move to the middle of the right chart.
+    let mv = Key { at: Duration::from_millis(1500), bytes: b"\x1b[<35;70;16M".to_vec() };
+    let hovered = run(std::slice::from_ref(&bin), true, &[mv], Some(2500));
+    let (_, _, after) = image_rgba(&hovered.term, 2).expect("chart 2");
+    assert_eq!(tooltip(&before), 0);
+    assert!(tooltip(&after) > 500, "tooltip box in chart 2: {} px", tooltip(&after));
+    assert_eq!(placements(&hovered.term).len(), 2, "still one placement per chart");
+}

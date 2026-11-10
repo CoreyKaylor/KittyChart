@@ -7,9 +7,12 @@
 
 pub mod detect;
 mod diacritics;
+pub mod input;
 pub mod kitty;
-pub mod sixel;
 #[cfg(all(unix, feature = "tty"))]
+pub mod local;
+pub mod sixel;
+#[cfg(all(any(unix, windows), feature = "tty"))]
 pub mod tty;
 
 /// A borrowed, tightly packed, non-premultiplied RGBA8 image.

@@ -2,6 +2,7 @@
 //! strings; the Python half (`python/kittychart`) builds them from dicts, numpy, pandas and
 //! polars, and does the Rich, Textual and IPython integration. Rendering releases the GIL.
 
+use kittychart::script::Script;
 use kittychart::show::{self, Mode, ShowOptions, TerminalInfo};
 use kittychart::{CellMode, ChartConfig, RenderOptions, TerminalColors};
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
@@ -10,6 +11,29 @@ use pyo3::types::{PyBytes, PyDict};
 
 fn config(json: &str) -> PyResult<ChartConfig> {
     ChartConfig::from_json(json).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// A config whose `{"__kc_fn": id}` markers call `dispatch(id, context_json) -> result_json`
+/// (the Python side maps ids to the user's functions).
+fn config_with(json: &str, dispatch: Option<Py<PyAny>>) -> PyResult<(ChartConfig, Option<Script>)> {
+    let c = config(json)?;
+    let Some(d) = dispatch else { return Ok((c, None)) };
+    let script = Script::new(move |id, ctx| {
+        Python::attach(|py| {
+            let r = d.call1(py, (id, ctx.to_string())).map_err(|e| e.to_string())?;
+            let text: String = r.extract(py).map_err(|e: PyErr| e.to_string())?;
+            serde_json::from_str(&text).map_err(|e| e.to_string())
+        })
+    });
+    Ok((c.with_script(script.clone()), Some(script)))
+}
+
+/// Raise the first callback error (as RuntimeError), if any.
+fn check(script: Option<&Script>) -> PyResult<()> {
+    match script.map(Script::take_errors).unwrap_or_default().first() {
+        Some(e) => Err(PyRuntimeError::new_err(e.clone())),
+        None => Ok(()),
+    }
 }
 
 fn color(s: Option<&str>) -> PyResult<Option<kittychart::Color>> {
@@ -60,7 +84,7 @@ fn validate(json: &str) -> PyResult<()> {
 
 /// Render to PNG bytes.
 #[pyfunction]
-#[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None))]
+#[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None, dispatch=None))]
 fn render_png<'py>(
     py: Python<'py>,
     json: &str,
@@ -68,10 +92,12 @@ fn render_png<'py>(
     height: Option<f32>,
     scale: f32,
     background: Option<&str>,
+    dispatch: Option<Py<PyAny>>,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let opts = render_options(width, height, scale, background)?;
-    let c = config(json)?;
+    let (c, script) = config_with(json, dispatch)?;
     let png = py.detach(|| kittychart::render(c, &opts).to_png());
+    check(script.as_ref())?;
     Ok(PyBytes::new(py, &png))
 }
 
@@ -90,7 +116,7 @@ fn render_options(
 
 /// Render to an SVG document.
 #[pyfunction]
-#[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None))]
+#[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None, dispatch=None))]
 fn render_svg(
     py: Python<'_>,
     json: &str,
@@ -98,15 +124,18 @@ fn render_svg(
     height: Option<f32>,
     scale: f32,
     background: Option<&str>,
+    dispatch: Option<Py<PyAny>>,
 ) -> PyResult<String> {
     let opts = render_options(width, height, scale, background)?;
-    let c = config(json)?;
-    Ok(py.detach(|| kittychart::render_svg(c, &opts)))
+    let (c, script) = config_with(json, dispatch)?;
+    let svg = py.detach(|| kittychart::render_svg(c, &opts));
+    check(script.as_ref())?;
+    Ok(svg)
 }
 
 /// Render to raw RGBA: `(width, height, bytes)`.
 #[pyfunction]
-#[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None))]
+#[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None, dispatch=None))]
 fn render_rgba<'py>(
     py: Python<'py>,
     json: &str,
@@ -114,10 +143,12 @@ fn render_rgba<'py>(
     height: Option<f32>,
     scale: f32,
     background: Option<&str>,
+    dispatch: Option<Py<PyAny>>,
 ) -> PyResult<(u32, u32, Bound<'py, PyBytes>)> {
     let opts = render_options(width, height, scale, background)?;
-    let c = config(json)?;
+    let (c, script) = config_with(json, dispatch)?;
     let img = py.detach(|| kittychart::render(c, &opts));
+    check(script.as_ref())?;
     Ok((img.width, img.height, PyBytes::new(py, &img.rgba)))
 }
 
@@ -200,18 +231,18 @@ fn probe(py: Python<'_>, timeout_ms: u64) -> PyResult<Bound<'_, PyDict>> {
 /// with cell size `None` when the terminal doesn't report pixels.
 #[pyfunction]
 fn window_size() -> PyResult<(u16, u16, Option<u16>, Option<u16>)> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let tty = kittychart_term_tty()?;
         let ws = tty.window_size().map_err(|e| PyOSError::new_err(e.to_string()))?;
         let px = ws.cell_px();
         Ok((ws.cols, ws.rows, px.map(|p| p.0), px.map(|p| p.1)))
     }
-    #[cfg(not(unix))]
-    Err(PyOSError::new_err("no Unix terminal"))
+    #[cfg(not(any(unix, windows)))]
+    Err(PyOSError::new_err("no terminal on this platform"))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn kittychart_term_tty() -> PyResult<kittychart::term::tty::Tty> {
     kittychart::term::tty::Tty::open().map_err(|e| PyOSError::new_err(e.to_string()))
 }
@@ -295,36 +326,46 @@ fn to_py(py: Python<'_>, p: show::Prepared) -> Prepared {
 
 /// Detect the terminal, choose a mode and render, without writing.
 #[pyfunction]
-fn prepare(py: Python<'_>, json: &str, opts: PyShowOptions) -> PyResult<Prepared> {
-    let c = config(json)?;
+#[pyo3(signature = (json, opts, dispatch=None))]
+fn prepare(
+    py: Python<'_>,
+    json: &str,
+    opts: PyShowOptions,
+    dispatch: Option<Py<PyAny>>,
+) -> PyResult<Prepared> {
+    let (c, script) = config_with(json, dispatch)?;
     let o = opts.to_show()?;
     let p = py.detach(|| show::prepare(c, &o)).map_err(|e| match e {
         show::ShowError::Io(e) => PyOSError::new_err(e.to_string()),
         e => PyRuntimeError::new_err(e.to_string()),
     })?;
+    check(script.as_ref())?;
     Ok(to_py(py, p))
 }
 
 /// Render for a known terminal (a dict from `probe`) without any I/O. `opts["protocol"]`
 /// "auto" (or None) picks the best mode the terminal supports.
 #[pyfunction]
+#[pyo3(signature = (json, info, opts, dispatch=None))]
 fn prepare_for(
     py: Python<'_>,
     json: &str,
     info: &Bound<'_, PyDict>,
     opts: PyShowOptions,
+    dispatch: Option<Py<PyAny>>,
 ) -> PyResult<Prepared> {
-    let c = config(json)?;
+    let (c, script) = config_with(json, dispatch)?;
     let info = info_from_dict(info)?;
     let o = opts.to_show()?;
     let m = o.mode.unwrap_or(Mode::Auto);
     let p = py.detach(|| show::prepare_for(c, &info, m, &o));
+    check(script.as_ref())?;
     Ok(to_py(py, p))
 }
 
 /// Render as text cells (truecolor ANSI). `colors` is a dict like `probe()["colors"]`.
 #[pyfunction]
-#[pyo3(signature = (json, cols, rows=None, mode="text", colors=None))]
+#[pyo3(signature = (json, cols, rows=None, mode="text", colors=None, dispatch=None))]
 fn render_text(
     py: Python<'_>,
     json: &str,
@@ -332,6 +373,7 @@ fn render_text(
     rows: Option<u32>,
     mode: &str,
     colors: Option<&Bound<'_, PyDict>>,
+    dispatch: Option<Py<PyAny>>,
 ) -> PyResult<String> {
     let cell = match mode {
         "text" => CellMode::Auto,
@@ -347,24 +389,25 @@ fn render_text(
     let cols = cells("cols", Some(cols))?.unwrap_or(80);
     let rows = cells("rows", rows)?;
     let colors = terminal_colors(colors)?;
-    let c = config(json)?;
+    let (c, script) = config_with(json, dispatch)?;
     let r =
         py.detach(|| kittychart::terminal::render_cells_for_terminal(c, cols, rows, cell, colors.as_ref()));
+    check(script.as_ref())?;
     String::from_utf8(r.bytes).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
 /// Write bytes to the controlling terminal (`/dev/tty`).
 #[pyfunction]
 fn write_tty(py: Python<'_>, data: &[u8]) -> PyResult<()> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let mut tty = kittychart_term_tty()?;
         py.detach(|| tty.write_all(data)).map_err(|e| PyOSError::new_err(e.to_string()))
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (py, data);
-        Err(PyOSError::new_err("no Unix terminal"))
+        Err(PyOSError::new_err("no terminal on this platform"))
     }
 }
 
@@ -401,8 +444,228 @@ fn next_image_id() -> u32 {
     show::next_image_id()
 }
 
+fn cell_mode(mode: &str) -> PyResult<CellMode> {
+    Ok(match mode {
+        "text" => CellMode::Auto,
+        "blocks" => CellMode::Blocks,
+        "half" => CellMode::HalfBlocks,
+        "braille" => CellMode::Braille,
+        m => {
+            return Err(PyValueError::new_err(format!(
+                "unknown text mode {m:?}; expected text, blocks, half or braille"
+            )));
+        }
+    })
+}
+
+/// A chart that lives across frames: hover, tooltip, legend clicks and animation (for TUI
+/// widgets). Coordinates are CSS pixels of the chart (cells × cell size ÷ scale).
+#[pyclass(unsendable, module = "kittychart._native")]
+struct Live {
+    chart: kittychart::Chart,
+    script: Option<Script>,
+    dispatch: Option<Py<PyAny>>,
+    cells: bool,
+    theme: Option<kittychart::Theme>,
+}
+
+impl std::fmt::Debug for Live {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Live").field("cells", &self.cells).finish_non_exhaustive()
+    }
+}
+
+#[pymethods]
+impl Live {
+    /// `cells`: drawn as text cells. `colors`: the surface's colors (like `probe()["colors"]`).
+    #[new]
+    #[pyo3(signature = (json, dispatch=None, cells=false, colors=None))]
+    fn new(
+        json: &str,
+        dispatch: Option<Py<PyAny>>,
+        cells: bool,
+        colors: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Live> {
+        let (c, script) = config_with(json, dispatch.as_ref().map(|d| Python::attach(|py| d.clone_ref(py))))?;
+        let theme = terminal_colors(colors)?.as_ref().map(kittychart::Theme::from_terminal);
+        let chart = if cells {
+            kittychart::Chart::for_cells(c, theme.clone())
+        } else {
+            kittychart::Chart::with_theme(c, theme.clone())
+        };
+        Ok(Live { chart, script, dispatch, cells, theme })
+    }
+
+    /// New data or options: animate to them (when a clock is set).
+    fn update(&mut self, json: &str) -> PyResult<()> {
+        let d = self.dispatch.as_ref().map(|d| Python::attach(|py| d.clone_ref(py)));
+        let (c, script) = config_with(json, d)?;
+        self.script = script;
+        self.chart.update(c);
+        Ok(())
+    }
+
+    /// Hover at `(x, y)` (or nowhere, with `None`): returns whether anything changed.
+    #[pyo3(signature = (x=None, y=None))]
+    fn hover(&mut self, x: Option<f64>, y: Option<f64>) -> bool {
+        let p = x.zip(y);
+        let (active, tooltip) = match p {
+            Some((x, y)) => (
+                self.chart.elements_at(x, y, &self.chart.hover_interaction()),
+                self.chart.elements_at(x, y, &self.chart.tooltip_interaction()),
+            ),
+            None => (vec![], vec![]),
+        };
+        let changed = active.as_slice() != self.chart.active() || !tooltip.is_empty() || p.is_none();
+        self.chart.set_active(active);
+        self.chart.set_tooltip(tooltip, p);
+        changed
+    }
+
+    /// A click: toggles the legend item at `(x, y)`. Returns whether it did.
+    fn click(&mut self, x: f64, y: f64) -> bool {
+        self.chart.legend_click(x, y)
+    }
+
+    /// Drive animations with this clock (milliseconds).
+    fn set_time(&mut self, ms: f64) {
+        self.chart.set_time(ms);
+    }
+
+    #[getter]
+    fn animating(&self) -> bool {
+        self.chart.is_animating()
+    }
+
+    /// The active elements as `[(dataset, index), …]`.
+    #[getter]
+    fn active(&self) -> Vec<(usize, usize)> {
+        self.chart.active().iter().map(|a| (a.dataset, a.index)).collect()
+    }
+
+    /// Draw to RGBA at exactly `width × height` device pixels.
+    fn render_rgba<'py>(
+        &mut self,
+        py: Python<'py>,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let mut c = kittychart::canvas::SkiaCanvas::with_pixel_size(width.max(1), height.max(1), scale);
+        self.chart.dpr = f64::from(scale);
+        self.chart.draw(&mut c);
+        check(self.script.as_ref())?;
+        Ok(PyBytes::new(py, &c.to_rgba()))
+    }
+
+    /// Draw and encode as a kitty image for a `cols × rows` cell area: a virtual placement
+    /// (for Unicode placeholders) when `virtual`, else displayed at the cursor.
+    #[pyo3(signature = (cols, rows, cell_width, cell_height, image_id, tmux=false, virtual_=true))]
+    #[allow(clippy::too_many_arguments)]
+    fn render_kitty<'py>(
+        &mut self,
+        py: Python<'py>,
+        cols: u32,
+        rows: u32,
+        cell_width: f32,
+        cell_height: f32,
+        image_id: u32,
+        tmux: bool,
+        virtual_: bool,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        use kittychart::term::kitty;
+        let scale = kittychart::terminal::default_scale(cell_height);
+        let (w, h) = ((cols as f32 * cell_width).round() as u32, (rows as f32 * cell_height).round() as u32);
+        let mut c = kittychart::canvas::SkiaCanvas::with_pixel_size(w.max(1), h.max(1), scale);
+        self.chart.dpr = f64::from(scale);
+        self.chart.draw(&mut c);
+        check(self.script.as_ref())?;
+        let rgba = c.to_rgba();
+        let img = kittychart::term::RgbaImage::new(c.pixel_width(), c.pixel_height(), &rgba);
+        let mut t = kitty::TransmitOptions::new(image_id.clamp(1, 0x00FF_FFFF));
+        t.columns = Some(cols);
+        t.rows = Some(rows);
+        t.placement_id = Some(1);
+        let mut out = Vec::new();
+        if virtual_ {
+            kitty::transmit_virtual(img, &t, &mut out);
+        } else {
+            kitty::transmit_and_display(img, &t, &mut out);
+        }
+        if tmux {
+            out = kitty::tmux_passthrough(&out);
+        }
+        Ok(PyBytes::new(py, &out))
+    }
+
+    /// Draw as `cols × rows` text cells (truecolor ANSI, rows separated by `\r\n`).
+    #[pyo3(signature = (cols, rows, mode="text"))]
+    fn render_text(&mut self, cols: u32, rows: u32, mode: &str) -> PyResult<String> {
+        let mut c = kittychart::canvas::cells::CellCanvas::new(cols.max(1), rows.max(1), cell_mode(mode)?);
+        self.chart.draw(&mut c);
+        check(self.script.as_ref())?;
+        Ok(c.into_grid().to_ansi())
+    }
+
+    #[getter]
+    fn cells(&self) -> bool {
+        let _ = &self.theme;
+        self.cells
+    }
+}
+
+/// Run the full-screen interactive viewer until the user quits.
+#[pyfunction]
+#[pyo3(signature = (json, opts, dispatch=None))]
+fn interact(
+    py: Python<'_>,
+    json: &str,
+    opts: &Bound<'_, PyDict>,
+    dispatch: Option<Py<PyAny>>,
+) -> PyResult<()> {
+    #[cfg(any(unix, windows))]
+    {
+        let (c, script) = config_with(json, dispatch)?;
+        let get = |k: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
+            Ok(opts.get_item(k)?.filter(|v| !v.is_none()))
+        };
+        let mode = get("protocol")?.map(|v| v.extract::<String>()).transpose()?;
+        let o = kittychart::interact::InteractOptions {
+            mode: mode.as_deref().map(str::parse::<Mode>).transpose().map_err(PyValueError::new_err)?,
+            scale: get("scale")?.map(|v| v.extract()).transpose()?,
+            background: color(get("background")?.map(|v| v.extract::<String>()).transpose()?.as_deref())?,
+            chartjs_colors: get("chartjs_colors")?.map(|v| v.extract()).transpose()?.unwrap_or(false),
+            no_fast_transfer: get("no_fast_transfer")?.map(|v| v.extract()).transpose()?.unwrap_or(false),
+            watch: get("watch")?.map(|v| v.extract::<std::path::PathBuf>()).transpose()?,
+            save_dir: None,
+        };
+        let script2 = script.clone();
+        let r = py.detach(move || {
+            kittychart::interact::interact(c, &o, |json| {
+                let c = ChartConfig::from_json(json).map_err(|e| e.to_string())?;
+                Ok(match &script2 {
+                    Some(s) => c.with_script(s.clone()),
+                    None => c,
+                })
+            })
+        });
+        check(script.as_ref())?;
+        r.map_err(|e| match e {
+            show::ShowError::Io(e) => PyOSError::new_err(e.to_string()),
+            e => PyRuntimeError::new_err(e.to_string()),
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (py, json, opts, dispatch);
+        Err(PyOSError::new_err("interactive charts need a Unix or Windows terminal"))
+    }
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Live>()?;
+    m.add_function(wrap_pyfunction!(interact, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_class::<Prepared>()?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;

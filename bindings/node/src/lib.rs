@@ -2,6 +2,7 @@
 //! `index.js` builds them from JavaScript values (typed arrays, Dates) and wraps them in the
 //! `Chart` class.
 
+use kittychart::script::Script;
 use kittychart::show::{self, Mode, ShowOptions, TerminalInfo};
 use kittychart::{CellMode, ChartConfig, RenderOptions, TerminalColors};
 use napi::bindgen_prelude::*;
@@ -9,6 +10,49 @@ use napi_derive::napi;
 
 fn invalid(msg: impl Into<String>) -> Error {
     Error::new(Status::InvalidArg, msg.into())
+}
+
+/// The JS dispatcher `(id, contextJson) => resultJson` for one native call.
+type Dispatch<'a> = Function<'a, FnArgs<(String, String)>, String>;
+
+/// A JS function handle that may only be used during the native call that received it.
+struct CallScoped {
+    env: napi::sys::napi_env,
+    f: napi::sys::napi_value,
+}
+
+// SAFETY: a `CallScoped` is only created inside a synchronous native call and only used by
+// the `Script` of the config built for that call, which is dropped before the call returns.
+// Everything runs on the JS thread; the bounds are what `Script` requires, not real sharing.
+unsafe impl Send for CallScoped {}
+unsafe impl Sync for CallScoped {}
+
+impl CallScoped {
+    fn call(&self, id: &str, ctx: &serde_json::Value) -> std::result::Result<serde_json::Value, String> {
+        // SAFETY: see `CallScoped`: still inside the native call, on the JS thread.
+        let f: Dispatch<'_> =
+            unsafe { Function::from_napi_value(self.env, self.f) }.map_err(|e| e.to_string())?;
+        let text = f.call(FnArgs::from((id.to_owned(), ctx.to_string()))).map_err(|e| e.reason.clone())?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+}
+
+/// A config whose `{"__kc_fn": id}` markers call the JS dispatcher (valid for this call).
+fn config_with(json: &str, dispatch: Option<Dispatch<'_>>) -> Result<(ChartConfig, Option<Script>)> {
+    let c = config(json)?;
+    let Some(d) = dispatch else { return Ok((c, None)) };
+    let v = JsValue::value(&d);
+    let js = CallScoped { env: v.env, f: v.value };
+    let script = Script::new(move |id, ctx| js.call(id, ctx));
+    Ok((c.with_script(script.clone()), Some(script)))
+}
+
+/// Throw the first callback error, if any.
+fn check(script: Option<&Script>) -> Result<()> {
+    match script.map(Script::take_errors).unwrap_or_default().first() {
+        Some(e) => Err(Error::from_reason(e.clone())),
+        None => Ok(()),
+    }
 }
 
 fn config(json: &str) -> Result<ChartConfig> {
@@ -74,9 +118,12 @@ fn render_options(o: &RenderOpts) -> Result<RenderOptions> {
 
 /// Render to PNG bytes.
 #[napi]
-pub fn render_png(json: String, opts: Option<RenderOpts>) -> Result<Buffer> {
+pub fn render_png(json: String, opts: Option<RenderOpts>, dispatch: Option<Dispatch<'_>>) -> Result<Buffer> {
     let r = render_options(&opts.unwrap_or_default())?;
-    Ok(kittychart::render(config(&json)?, &r).to_png().into())
+    let (c, script) = config_with(&json, dispatch)?;
+    let png = kittychart::render(c, &r).to_png();
+    check(script.as_ref())?;
+    Ok(png.into())
 }
 
 #[napi(object)]
@@ -90,16 +137,25 @@ pub struct RgbaImage {
 
 /// Render to an SVG document (text as outlines, no fonts needed).
 #[napi]
-pub fn render_svg(json: String, opts: Option<RenderOpts>) -> Result<String> {
+pub fn render_svg(json: String, opts: Option<RenderOpts>, dispatch: Option<Dispatch<'_>>) -> Result<String> {
     let r = render_options(&opts.unwrap_or_default())?;
-    Ok(kittychart::render_svg(config(&json)?, &r))
+    let (c, script) = config_with(&json, dispatch)?;
+    let svg = kittychart::render_svg(c, &r);
+    check(script.as_ref())?;
+    Ok(svg)
 }
 
 /// Render to raw RGBA pixels.
 #[napi]
-pub fn render_rgba(json: String, opts: Option<RenderOpts>) -> Result<RgbaImage> {
+pub fn render_rgba(
+    json: String,
+    opts: Option<RenderOpts>,
+    dispatch: Option<Dispatch<'_>>,
+) -> Result<RgbaImage> {
     let r = render_options(&opts.unwrap_or_default())?;
-    let img = kittychart::render(config(&json)?, &r);
+    let (c, script) = config_with(&json, dispatch)?;
+    let img = kittychart::render(c, &r);
+    check(script.as_ref())?;
     Ok(RgbaImage { width: img.width, height: img.height, data: img.rgba.into() })
 }
 
@@ -152,6 +208,7 @@ pub fn render_text(
     rows: Option<u32>,
     mode: Option<String>,
     colors: Option<Colors>,
+    dispatch: Option<Dispatch<'_>>,
 ) -> Result<String> {
     let cell = match mode.as_deref().unwrap_or("text") {
         "text" => CellMode::Auto,
@@ -163,8 +220,9 @@ pub fn render_text(
     let cols = cells("cols", Some(cols))?.unwrap_or(80);
     let rows = cells("rows", rows)?;
     let colors = colors.as_ref().map(to_terminal_colors).transpose()?;
-    let r =
-        kittychart::terminal::render_cells_for_terminal(config(&json)?, cols, rows, cell, colors.as_ref());
+    let (c, script) = config_with(&json, dispatch)?;
+    let r = kittychart::terminal::render_cells_for_terminal(c, cols, rows, cell, colors.as_ref());
+    check(script.as_ref())?;
     String::from_utf8(r.bytes).map_err(|e| Error::from_reason(e.to_string()))
 }
 
@@ -282,15 +340,22 @@ fn to_js(p: show::Prepared) -> Prepared {
 
 /// Detect the terminal, choose a mode and render, without writing.
 #[napi]
-pub fn prepare(json: String, opts: Option<ShowOpts>) -> Result<Prepared> {
+pub fn prepare(json: String, opts: Option<ShowOpts>, dispatch: Option<Dispatch<'_>>) -> Result<Prepared> {
     let o = show_options(&opts.unwrap_or_default())?;
-    let p = show::prepare(config(&json)?, &o).map_err(|e| Error::from_reason(e.to_string()))?;
+    let (c, script) = config_with(&json, dispatch)?;
+    let p = show::prepare(c, &o).map_err(|e| Error::from_reason(e.to_string()))?;
+    check(script.as_ref())?;
     Ok(to_js(p))
 }
 
 /// Render for a known terminal (from `probe`) without any I/O.
 #[napi]
-pub fn prepare_for(json: String, info: TermInfo, opts: Option<ShowOpts>) -> Result<Prepared> {
+pub fn prepare_for(
+    json: String,
+    info: TermInfo,
+    opts: Option<ShowOpts>,
+    dispatch: Option<Dispatch<'_>>,
+) -> Result<Prepared> {
     let o = show_options(&opts.unwrap_or_default())?;
     let info = TerminalInfo {
         cols: u16::try_from(info.cols).unwrap_or(u16::MAX),
@@ -303,21 +368,72 @@ pub fn prepare_for(json: String, info: TermInfo, opts: Option<ShowOpts>) -> Resu
         colors: info.colors.as_ref().map(to_terminal_colors).transpose()?,
     };
     let m = o.mode.unwrap_or(Mode::Auto);
-    Ok(to_js(show::prepare_for(config(&json)?, &info, m, &o)))
+    let (c, script) = config_with(&json, dispatch)?;
+    let p = show::prepare_for(c, &info, m, &o);
+    check(script.as_ref())?;
+    Ok(to_js(p))
 }
 
-/// Write bytes to the controlling terminal (`/dev/tty`). Unix only.
+/// Write bytes to the controlling terminal (`/dev/tty`, or the Windows console).
 #[napi]
 pub fn write_tty(data: Buffer) -> Result<()> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let mut tty = kittychart::term::tty::Tty::open().map_err(|e| Error::from_reason(e.to_string()))?;
         tty.write_all(&data).map_err(|e| Error::from_reason(e.to_string()))
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = data;
-        Err(Error::from_reason("no Unix terminal"))
+        Err(Error::from_reason("no terminal on this platform"))
+    }
+}
+
+#[napi(object)]
+#[derive(Debug, Default)]
+pub struct InteractOpts {
+    pub protocol: Option<String>,
+    pub scale: Option<f64>,
+    pub background: Option<String>,
+    /// "terminal" (default) or "chartjs".
+    pub colors: Option<String>,
+    /// Send frames inline even when the terminal reads temp files or shared memory.
+    pub no_fast_transfer: Option<bool>,
+    /// Follow this JSON file: animate to its contents when it changes.
+    pub watch: Option<String>,
+}
+
+/// Run the full-screen interactive viewer until the user quits (blocks).
+#[napi]
+pub fn interact(json: String, opts: Option<InteractOpts>, dispatch: Option<Dispatch<'_>>) -> Result<()> {
+    #[cfg(any(unix, windows))]
+    {
+        let o = opts.unwrap_or_default();
+        let (c, script) = config_with(&json, dispatch)?;
+        let io = kittychart::interact::InteractOptions {
+            mode: o.protocol.as_deref().map(str::parse::<Mode>).transpose().map_err(invalid)?,
+            scale: positive("scale", o.scale)?,
+            background: color(o.background.as_deref())?,
+            chartjs_colors: o.colors.as_deref() == Some("chartjs"),
+            no_fast_transfer: o.no_fast_transfer.unwrap_or(false),
+            watch: o.watch.map(std::path::PathBuf::from),
+            save_dir: None,
+        };
+        let script2 = script.clone();
+        let r = kittychart::interact::interact(c, &io, |json| {
+            let c = ChartConfig::from_json(json).map_err(|e| e.to_string())?;
+            Ok(match &script2 {
+                Some(s) => c.with_script(s.clone()),
+                None => c,
+            })
+        });
+        check(script.as_ref())?;
+        r.map_err(|e| Error::from_reason(e.to_string()))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (json, opts, dispatch);
+        Err(Error::from_reason("interactive charts need a Unix or Windows terminal"))
     }
 }
 

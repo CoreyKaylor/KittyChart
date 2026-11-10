@@ -18,20 +18,30 @@ Config = Mapping[str, Any]
 # --- converting Python data to Chart.js JSON -------------------------------------------------
 
 
-def _jsonable(obj: Any) -> Any:
+def _jsonable(obj: Any, fns: Optional[dict] = None) -> Any:
     """Convert dicts/lists of Python, numpy, pandas and polars values into JSON-ready values.
 
     NaN and infinities become ``null`` (Chart.js draws them as gaps), dates become ISO 8601
-    strings (which time scales parse), numpy/pandas/polars arrays become lists.
+    strings (which time scales parse), numpy/pandas/polars arrays become lists. Functions
+    (scriptable options) become ``{"__kc_fn": id}`` markers, registered in ``fns``.
     """
     if obj is None or isinstance(obj, (str, bool, int)):
         return obj
+    if callable(obj) and not isinstance(obj, type) and not hasattr(obj, "tolist"):
+        if fns is None:
+            raise TypeError("functions are only allowed in chart configs (scriptable options)")
+        for k, f in fns.items():
+            if f is obj:
+                return {"__kc_fn": k}
+        k = f"f{len(fns)}"
+        fns[k] = obj
+        return {"__kc_fn": k}
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
     if isinstance(obj, Mapping):
-        return {str(k): _jsonable(v) for k, v in obj.items()}
+        return {str(k): _jsonable(v, fns) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [_jsonable(v) for v in obj]
+        return [_jsonable(v, fns) for v in obj]
     if isinstance(obj, (_dt.datetime, _dt.date)):
         # pandas.NaT is a datetime subclass whose isoformat() is "NaT".
         s = obj.isoformat()
@@ -158,11 +168,48 @@ def _show_options(
 # --- the chart -------------------------------------------------------------------------------
 
 
+class Context(dict):
+    """A Chart.js option context (or tooltip item) for scriptable options: a dict that also
+    allows attribute access, so ``ctx.raw``, ``ctx.parsed.y`` and ``ctx["dataIndex"]`` all
+    work."""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+
+def _wrap(v: Any) -> Any:
+    if isinstance(v, dict):
+        return Context({k: _wrap(x) for k, x in v.items()})
+    if isinstance(v, list):
+        return [_wrap(x) for x in v]
+    return v
+
+
+def _dispatcher(fns: dict) -> Any:
+    """The native side's callback: ``(id, context_json) -> result_json``."""
+
+    def dispatch(fid: str, ctx_json: str) -> str:
+        ctx = json.loads(ctx_json)
+        args = ctx.pop("__args", None)
+        f = fns[fid]
+        result = f(*[_wrap(a) for a in args]) if args is not None else f(_wrap(ctx))
+        return json.dumps(_jsonable(result), allow_nan=False)
+
+    return dispatch
+
+
 class Chart:
     """A Chart.js chart: ``Chart({"type": ..., "data": ..., "options": ...})`` or
     ``Chart(type="bar", data={...}, options={...})``.
 
     Data may contain numpy arrays, pandas/polars Series, datetimes and NaN (drawn as a gap).
+    Options may be functions, as in Chart.js: they get the option's context (a
+    :class:`Context`: ``ctx.raw``, ``ctx.parsed.y``, ``ctx.dataIndex`` …) or, where Chart.js
+    passes arguments (``ticks.callback(value, index, ticks)``, ``tooltip.callbacks.label(item)``),
+    those arguments.
     """
 
     def __init__(
@@ -183,8 +230,10 @@ class Chart:
         self._set(cfg)
 
     def _set(self, cfg: dict) -> None:
-        text = json.dumps(_jsonable(cfg), allow_nan=False, separators=(",", ":"))
+        fns: dict = {}
+        text = json.dumps(_jsonable(cfg, fns), allow_nan=False, separators=(",", ":"))
         _native.validate(text)  # raises ValueError with the reason
+        self._dispatch = _dispatcher(fns) if fns else None
         self._config = cfg
         self._json = text
         # kitty image id for inline rendering (Rich), reused while the config is unchanged so
@@ -268,7 +317,7 @@ class Chart:
     ) -> bytes:
         """PNG bytes. ``width``/``height`` are CSS pixels (height defaults to the aspect ratio);
         ``scale`` is the device pixel ratio."""
-        return _native.render_png(self._json, float(width), _f(height), float(scale), background)
+        return _native.render_png(self._json, float(width), _f(height), float(scale), background, self._dispatch)
 
     def to_svg(
         self,
@@ -279,7 +328,7 @@ class Chart:
         background: Optional[str] = None,
     ) -> str:
         """An SVG document of the same chart. Text is drawn as outlines (no fonts needed)."""
-        return _native.render_svg(self._json, float(width), _f(height), float(scale), background)
+        return _native.render_svg(self._json, float(width), _f(height), float(scale), background, self._dispatch)
 
     def save(self, path: Union[str, os.PathLike], **kwargs: Any) -> None:
         """Write a PNG file, or an SVG file when the name ends in ``.svg`` (see
@@ -300,7 +349,7 @@ class Chart:
         background: Optional[str] = None,
     ) -> "tuple[int, int, bytes]":
         """``(width, height, pixels)``: non-premultiplied RGBA8, row by row."""
-        return _native.render_rgba(self._json, float(width), _f(height), float(scale), background)
+        return _native.render_rgba(self._json, float(width), _f(height), float(scale), background, self._dispatch)
 
     def to_text(
         self,
@@ -312,7 +361,7 @@ class Chart:
     ) -> str:
         """Block and Braille characters with truecolor ANSI escapes. ``mode`` is "text",
         "blocks", "half" or "braille"; ``colors`` like ``probe()["colors"]``."""
-        return _native.render_text(self._json, cols, rows, mode, dict(colors) if colors else None)
+        return _native.render_text(self._json, cols, rows, mode, dict(colors) if colors else None, self._dispatch)
 
     # Showing in the terminal.
 
@@ -346,7 +395,37 @@ class Chart:
             sys.stdout.flush()
         except Exception:
             pass
-        _write(_native.prepare(self._json, opts))
+        _write(_native.prepare(self._json, opts, self._dispatch))
+
+    def interact(
+        self,
+        *,
+        watch: Optional[Union[str, os.PathLike]] = None,
+        protocol: Optional[str] = None,
+        scale: Optional[float] = None,
+        background: Optional[str] = None,
+        colors: str = "terminal",
+        fast_transfer: bool = True,
+    ) -> None:
+        """Explore the chart full-screen until ``q``: hover for tooltips, click legend items
+        to hide datasets, arrows to step through the data, ``r`` to replay the animation,
+        ``s`` to save a PNG. With ``watch``, the chart animates to that JSON file's contents
+        whenever it changes."""
+        if colors not in ("terminal", "chartjs"):
+            raise ValueError('colors must be "terminal" or "chartjs"')
+        opts = {
+            "protocol": protocol,
+            "scale": scale,
+            "background": background,
+            "chartjs_colors": colors == "chartjs",
+            "no_fast_transfer": not fast_transfer,
+            "watch": os.fspath(watch) if watch is not None else None,
+        }
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        _native.interact(self._json, opts, self._dispatch)
 
     # Notebook and IPython integration.
 
@@ -358,7 +437,7 @@ class Chart:
         if cycle or _in_jupyter():
             p.text(repr(self))
             return
-        prepared = _native.prepare(self._json, _show_options())
+        prepared = _native.prepare(self._json, _show_options(), self._dispatch)
         if prepared.target == "tty":
             _native.write_tty(prepared.data)
             p.text(repr(self))

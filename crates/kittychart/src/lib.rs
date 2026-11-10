@@ -19,6 +19,9 @@ pub use kittychart_core::color::parse as parse_color;
 pub use kittychart_core::script;
 pub use kittychart_core::{Chart, ChartConfig, ChartType, ConfigError, Label, TerminalColors, Theme};
 
+#[cfg(any(unix, windows))]
+pub mod interact;
+pub mod session;
 pub mod show;
 pub mod terminal;
 

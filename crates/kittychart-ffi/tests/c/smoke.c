@@ -6,6 +6,15 @@
 #define CHECK(cond) do { if (!(cond)) { fprintf(stderr, "FAIL %s:%d: %s (%s)\n", __FILE__, __LINE__, #cond, \
     kc_last_error() ? kc_last_error() : "no error"); return 1; } } while (0)
 
+/* Scriptable options: color bars by their data index (red for index 1, else blue). */
+static int calls = 0;
+static const char *color_by_index(const char *id, const char *ctx, void *user) {
+    (void)user;
+    calls++;
+    if (strcmp(id, "color") != 0) return NULL;
+    return strstr(ctx, "\"dataIndex\":1,") ? "\"#ff0000\"" : "\"#0000ff\"";
+}
+
 static const char *BAR =
     "{\"type\":\"bar\",\"data\":{\"labels\":[\"Q1\",\"Q2\",\"Q3\"],"
     "\"datasets\":[{\"label\":\"Revenue\",\"data\":[12,19,7]}]}}";
@@ -69,6 +78,23 @@ int main(int argc, char **argv) {
     CHECK(kc_render_text(chart, 40, 0, "braille", &text) == 0);
     CHECK(strstr((const char *)text.data, "Updated") != NULL);
     kc_bytes_free(text);
+
+    /* Callbacks: a scripted chart renders exactly like its static equivalent. */
+    kc_chart *scripted = kc_chart_from_json(
+        "{\"type\":\"bar\",\"data\":{\"labels\":[\"a\",\"b\",\"c\"],"
+        "\"datasets\":[{\"data\":[3,5,4],\"backgroundColor\":{\"__kc_fn\":\"color\"}}]}}");
+    kc_chart *fixed = kc_chart_from_json(
+        "{\"type\":\"bar\",\"data\":{\"labels\":[\"a\",\"b\",\"c\"],"
+        "\"datasets\":[{\"data\":[3,5,4],\"backgroundColor\":[\"#0000ff\",\"#ff0000\",\"#0000ff\"]}]}}");
+    CHECK(scripted && fixed);
+    CHECK(kc_chart_set_dispatch(scripted, color_by_index, NULL) == 0);
+    kc_image a, b;
+    CHECK(kc_render_rgba(scripted, NULL, &a) == 0 && kc_render_rgba(fixed, NULL, &b) == 0);
+    CHECK(calls >= 3 && a.rgba.len == b.rgba.len && memcmp(a.rgba.data, b.rgba.data, a.rgba.len) == 0);
+    kc_bytes_free(a.rgba);
+    kc_bytes_free(b.rgba);
+    kc_chart_free(scripted);
+    kc_chart_free(fixed);
 
     kc_bytes empty = { NULL, 0 };
     kc_bytes_free(empty);

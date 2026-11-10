@@ -147,3 +147,69 @@ fn rich_sixel_keeps_the_layout() {
     let notes = lines.iter().find(|l| l.contains("Web still leads")).expect(&text);
     assert!(notes.find("Web still leads").unwrap() > 40, "notes stay in their column:\n{text}");
 }
+
+fn tooltip_px(rgba: &[u8]) -> usize {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] > 150 && p[3] < 240 && p[0] < 10 && p[1] < 10 && p[2] < 10)
+        .count()
+}
+
+#[test]
+fn textual_hover_adds_a_tooltip() {
+    let argv = py(&[&python_example("textual_dashboard.py")]);
+    // The example's data is random unless seeded: the same seed gives the still and the
+    // hovered run the same charts, so they can be compared pixel for pixel.
+    let env = [("KITTYCHART_EXAMPLE_SEED", "7")];
+    let images = |r: &Run| -> Vec<(u32, Vec<u8>)> {
+        let mut v: Vec<_> = placements(&r.term)
+            .iter()
+            .map(|p| (p.image_id, image_rgba(&r.term, p.image_id).unwrap().2))
+            .collect();
+        v.sort_by_key(|(id, _)| *id); // ids follow mount order: the bar chart, then the line chart
+        v
+    };
+    let still = images(&run_full(&argv, &env, COLS, ROWS, true, &[], Some(6000)));
+    assert_eq!(still.len(), 2);
+    // Move into the right-hand (line) chart, in cell coordinates, after the initial animation
+    // has finished (so the hover transition must drive its own frames). Python + Textual can
+    // take a few seconds to start under a loaded test run, so the move repeats until it lands.
+    let mv: Vec<Key> = [4500, 6000]
+        .map(|ms| Key { at: Duration::from_millis(ms), bytes: b"\x1b[<35;75;16M".to_vec() })
+        .to_vec();
+    let hovered = images(&run_full(&argv, &env, COLS, ROWS, true, &mv, Some(7500)));
+    assert_eq!(hovered.len(), 2);
+    let changed: Vec<usize> = still.iter().zip(&hovered).map(|((_, a), (_, b))| darkened_px(a, b)).collect();
+    assert!(changed[0] < 500, "the bar chart changed: {changed:?}");
+    assert!(changed[1] > 2000, "no tooltip on the line chart: {changed:?}");
+}
+
+/// Pixels that `b` draws clearly darker than `a`, both composited over mid-grey: a tooltip box
+/// (translucent black) shows up whether it covers the background, a fill or a line.
+fn darkened_px(a: &[u8], b: &[u8]) -> usize {
+    let luma = |p: &[u8; 4]| -> i32 {
+        let alpha = i32::from(p[3]);
+        (0..3).map(|i| (i32::from(p[i]) * alpha + 128 * (255 - alpha)) / 255).sum()
+    };
+    a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).filter(|(p, q)| luma(p) - luma(q) > 90).count()
+}
+
+#[test]
+fn python_interact_hover_and_quit() {
+    let argv = py(&[&python_example("interact.py")]);
+    let keys = [Key { at: Duration::from_millis(1500), bytes: b"\x1b[<35;500;300M".to_vec() }];
+    let hovered = run(&argv, true, &keys, Some(2500));
+    let p = placements(&hovered.term);
+    assert_eq!(p.len(), 1, "{p:?}");
+    let (_, _, rgba) = image_rgba(&hovered.term, p[0].image_id).unwrap();
+    assert!(tooltip_px(&rgba) > 1000, "tooltip: {} px", tooltip_px(&rgba));
+    let quit = run(
+        &argv,
+        true,
+        &[keys[0].clone(), Key { at: Duration::from_millis(2200), bytes: b"q".to_vec() }],
+        None,
+    );
+    assert_eq!(quit.out.exit, Some(0), "{}", String::from_utf8_lossy(&quit.out.output));
+    assert!(placements(&quit.term).is_empty());
+}

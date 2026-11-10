@@ -241,7 +241,7 @@ impl Chart {
 
     // ------------------------------------------------------------------ scopes
 
-    fn chart_type(&self) -> ChartType {
+    pub fn chart_type(&self) -> ChartType {
         self.config.chart_type
     }
 

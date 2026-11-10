@@ -52,6 +52,23 @@ pub struct TransmitOptions {
     /// Leave the cursor where it was instead of moving it past the image (`C=1`).
     pub hold_cursor: bool,
     pub quiet: Quiet,
+    /// How the pixels travel (default: inline in the escape, base64).
+    pub medium: Medium,
+}
+
+/// Transmission medium (`t=`). File and shared-memory media only work when the terminal runs
+/// on the same machine; probe with `tty::Tty::probe_media` before using them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Medium {
+    /// `t=d`: the pixels, base64, in the escape sequence.
+    #[default]
+    Direct,
+    /// `t=t`: a temporary file holding the raw RGBA pixels. The terminal deletes it after
+    /// reading. Its name must contain `tty-graphics-protocol`.
+    TempFile(String),
+    /// `t=s`: a POSIX shared-memory object holding the raw RGBA pixels. The terminal unlinks
+    /// it after reading.
+    SharedMemory(String),
 }
 
 impl TransmitOptions {
@@ -65,6 +82,7 @@ impl TransmitOptions {
             compress: true,
             hold_cursor: false,
             quiet: Quiet::default(),
+            medium: Medium::Direct,
         }
     }
 }
@@ -73,6 +91,40 @@ impl TransmitOptions {
 ///
 /// The first chunk carries every control key. Later chunks carry only `m` (more-follows) and `q`.
 pub fn transmit_and_display(img: RgbaImage<'_>, opts: &TransmitOptions, out: &mut Vec<u8>) {
+    // Out-of-band media: the pixels are already in the file/shared memory, uncompressed; the
+    // escape carries its name.
+    let (medium, name) = match &opts.medium {
+        Medium::Direct => (None, None),
+        Medium::TempFile(path) => (Some('t'), Some(path)),
+        Medium::SharedMemory(name) => (Some('s'), Some(name)),
+    };
+    if let (Some(t), Some(name)) = (medium, name) {
+        let mut keys = String::with_capacity(96);
+        write!(
+            keys,
+            "a=T,f=32,t={t},s={},v={},S={},i={}",
+            img.width,
+            img.height,
+            img.data.len(),
+            opts.image_id
+        )
+        .unwrap();
+        if let Some(p) = opts.placement_id {
+            write!(keys, ",p={p}").unwrap();
+        }
+        if let Some(c) = opts.columns {
+            write!(keys, ",c={c}").unwrap();
+        }
+        if let Some(r) = opts.rows {
+            write!(keys, ",r={r}").unwrap();
+        }
+        if opts.hold_cursor {
+            keys.push_str(",C=1");
+        }
+        write!(keys, ",q={}", opts.quiet.value()).unwrap();
+        write_chunked(&keys, opts.quiet, B64.encode(name.as_bytes()).as_bytes(), out);
+        return;
+    }
     let payload = if opts.compress {
         let mut enc = flate2::write::ZlibEncoder::new(
             Vec::with_capacity(img.data.len() / 8),
@@ -264,6 +316,22 @@ impl std::fmt::Write for DisplayVec<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn out_of_band_media_send_only_the_location() {
+        let px = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let mut t = TransmitOptions::new(9);
+        t.medium = Medium::TempFile("/tmp/tty-graphics-protocol-x.rgba".into());
+        let mut out = Vec::new();
+        transmit_and_display(RgbaImage::new(2, 1, &px), &t, &mut out);
+        let s = String::from_utf8(out).unwrap();
+        let b64 = B64.encode("/tmp/tty-graphics-protocol-x.rgba");
+        assert_eq!(s, format!("\x1b_Ga=T,f=32,t=t,s=2,v=1,S=8,i=9,q=2;{b64}\x1b\\"));
+        t.medium = Medium::SharedMemory("/kc".into());
+        let mut out = Vec::new();
+        transmit_virtual(RgbaImage::new(2, 1, &px), &t, &mut out);
+        assert!(String::from_utf8(out).unwrap().starts_with("\x1b_Ga=T,U=1,f=32,t=s,s=2,v=1,S=8,i=9,p=1,"));
+    }
 
     #[test]
     fn columns_past_the_diacritic_table_are_inferred() {

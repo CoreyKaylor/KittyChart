@@ -28,9 +28,10 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use kittychart::terminal::{TermGeometry, TermOptions, render_for_terminal};
-use kittychart::{ChartConfig, TerminalColors};
-use kittychart_canvas::cells::CellMode;
+use kittychart::{Chart, ChartConfig, TerminalColors};
+use kittychart_canvas::SkiaCanvas;
+use kittychart_canvas::cells::{CELL_H, CELL_W, CellCanvas, CellMode};
+use kittychart_term::RgbaImage;
 use kittychart_term::kitty::{self, TransmitOptions};
 use ratatui_core::buffer::Buffer;
 use ratatui_core::layout::Rect;
@@ -85,18 +86,42 @@ impl<'a> ChartWidget<'a> {
     }
 }
 
-/// Per-widget state: the kitty image id, and what has been sent.
-#[derive(Debug, Clone)]
+/// Per-widget state: the kitty image id, what has been sent, and the live chart (hover,
+/// tooltip, legend toggles and animation live here between frames).
+#[derive(Debug)]
 pub struct ChartState {
     image_id: u32,
     sent: Option<u64>,
     pending: Option<Vec<u8>>,
+    /// The live chart, and what it was built for (chart type, colors, graphics).
+    chart: Option<(u64, Chart)>,
+    /// The config the chart shows (to animate to a changed one).
+    config_key: Option<u64>,
+    /// Where it was last drawn, and the scale (device px per CSS px; 1 in cell mode).
+    area: Rect,
+    cell: (f32, f32),
+    scale: f32,
+    cells: bool,
+    pointer: Option<(f64, f64)>,
+    now: Option<f64>,
 }
 
 impl ChartState {
     /// `image_id` must be unique among the images your app shows (1..=0xFFFFFF).
     pub fn new(image_id: u32) -> Self {
-        Self { image_id: image_id.clamp(1, 0x00FF_FFFF), sent: None, pending: None }
+        Self {
+            image_id: image_id.clamp(1, 0x00FF_FFFF),
+            sent: None,
+            pending: None,
+            chart: None,
+            config_key: None,
+            area: Rect::default(),
+            cell: (8.0, 16.0),
+            scale: 1.0,
+            cells: false,
+            pointer: None,
+            now: None,
+        }
     }
 
     pub fn image_id(&self) -> u32 {
@@ -121,6 +146,109 @@ impl ChartState {
     pub fn invalidate(&mut self) {
         self.sent = None;
     }
+
+    /// The live chart, once drawn.
+    pub fn chart(&self) -> Option<&Chart> {
+        self.chart.as_ref().map(|(_, c)| c)
+    }
+
+    /// Terminal cell (absolute column and row, as crossterm reports mouse events) → chart CSS
+    /// pixels, if inside the widget.
+    fn to_chart(&self, column: u16, row: u16) -> Option<(f64, f64)> {
+        let a = self.area;
+        if column < a.x || row < a.y || column >= a.x + a.width || row >= a.y + a.height {
+            return None;
+        }
+        let (cw, ch) = if self.cells {
+            (f64::from(CELL_W), f64::from(CELL_H))
+        } else {
+            (f64::from(self.cell.0), f64::from(self.cell.1))
+        };
+        let x = (f64::from(column - a.x) + 0.5) * cw / f64::from(self.scale);
+        let y = (f64::from(row - a.y) + 0.5) * ch / f64::from(self.scale);
+        Some((x, y))
+    }
+
+    /// The pointer moved to `(column, row)`: hover and tooltip, as Chart.js does on mousemove.
+    /// Returns whether the chart needs redrawing.
+    pub fn handle_mouse(&mut self, column: u16, row: u16) -> bool {
+        let p = self.to_chart(column, row);
+        self.hover(p)
+    }
+
+    /// The pointer left the widget (or the window lost focus).
+    pub fn clear_hover(&mut self) -> bool {
+        self.hover(None)
+    }
+
+    fn hover(&mut self, p: Option<(f64, f64)>) -> bool {
+        let Some((_, chart)) = &mut self.chart else { return false };
+        let (active, tooltip) = match p {
+            Some((x, y)) => (
+                chart.elements_at(x, y, &chart.hover_interaction()),
+                chart.elements_at(x, y, &chart.tooltip_interaction()),
+            ),
+            None => (vec![], vec![]),
+        };
+        let changed = active.as_slice() != chart.active() || self.pointer != p;
+        chart.set_active(active);
+        chart.set_tooltip(tooltip, p);
+        self.pointer = p;
+        changed
+    }
+
+    /// A click at `(column, row)`: toggles the legend item there. Returns whether it did.
+    pub fn handle_click(&mut self, column: u16, row: u16) -> bool {
+        let Some((x, y)) = self.to_chart(column, row) else { return false };
+        self.chart.as_mut().is_some_and(|(_, c)| c.legend_click(x, y))
+    }
+
+    /// Advance the animation clock (milliseconds, monotonic). Without it nothing animates.
+    pub fn set_time(&mut self, now_ms: f64) {
+        self.now = Some(now_ms);
+    }
+
+    /// Whether the chart is mid-animation (draw again soon).
+    pub fn is_animating(&self) -> bool {
+        self.chart.as_ref().is_some_and(|(_, c)| c.is_animating())
+    }
+
+    /// The chart for `widget`: reused while its type, colors and graphics stay the same (a new
+    /// config animates to the new data).
+    fn chart_for(&mut self, widget: &ChartWidget<'_>) -> &mut Chart {
+        let build_key = {
+            let mut h = DefaultHasher::new();
+            format!("{:?}{:?}{:?}", widget.config.chart_type, widget.colors, widget.graphics).hash(&mut h);
+            h.finish()
+        };
+        let config_key = {
+            let mut h = DefaultHasher::new();
+            widget.config.data.to_string().hash(&mut h);
+            widget.config.options.to_string().hash(&mut h);
+            h.finish()
+        };
+        let theme = widget.colors.as_ref().map(kittychart::Theme::from_terminal);
+        let rebuild = self.chart.as_ref().is_none_or(|(k, _)| *k != build_key);
+        if rebuild {
+            let chart = match widget.graphics {
+                Graphics::Cells(_) => Chart::for_cells(widget.config.clone(), theme),
+                Graphics::Kitty { .. } => Chart::with_theme(widget.config.clone(), theme),
+            };
+            self.chart = Some((build_key, chart));
+            self.config_key = Some(config_key);
+        } else if self.config_key != Some(config_key) {
+            if let Some((_, c)) = &mut self.chart {
+                c.update(widget.config.clone());
+            }
+            self.config_key = Some(config_key);
+        }
+        let now = self.now;
+        let (_, chart) = self.chart.as_mut().expect("built above");
+        if let Some(t) = now {
+            chart.set_time(t);
+        }
+        chart
+    }
 }
 
 impl StatefulWidget for ChartWidget<'_> {
@@ -136,23 +264,50 @@ impl StatefulWidget for ChartWidget<'_> {
                 // Placeholder rows are numbered by diacritics (297 of them); taller areas keep
                 // their extra rows empty.
                 let area = Rect { height: area.height.min(kitty::MAX_PLACEHOLDER_ROWS as u16), ..area };
+                let scale = kittychart::terminal::default_scale(cell_height);
+                (state.area, state.cell, state.scale, state.cells) =
+                    (area, (cell_width, cell_height), scale, false);
+                let tmux = self.tmux;
                 let key = self.key(area);
-                if state.sent != Some(key) {
-                    let geom = TermGeometry { cols: area.width, cell_width, cell_height };
-                    let opts = TermOptions {
-                        cols: Some(area.width),
-                        rows: Some(area.height),
-                        colors: self.colors.clone(),
-                        ..TermOptions::default()
-                    };
-                    let image = render_for_terminal(self.config.clone(), geom, &opts).image;
-                    let mut t = TransmitOptions::new(state.image_id);
+                let image_id = state.image_id;
+                let prev_sent = state.sent;
+                let chart = state.chart_for(&self);
+                // Something to show that wasn't sent: a new chart or size, hover, animation.
+                let changed = chart.is_animating() || !chart.active().is_empty() || chart.tooltip.is_some();
+                let frame_key = {
+                    let mut h = DefaultHasher::new();
+                    key.hash(&mut h);
+                    format!(
+                        "{:?}{:?}",
+                        chart.active(),
+                        chart.legend.items.iter().map(|i| i.hidden).collect::<Vec<_>>()
+                    )
+                    .hash(&mut h);
+                    h.finish()
+                };
+                let frame = (prev_sent != Some(frame_key) || changed).then(|| {
+                    let (w, h) = (
+                        (f32::from(area.width) * cell_width).round() as u32,
+                        (f32::from(area.height) * cell_height).round() as u32,
+                    );
+                    let mut canvas = SkiaCanvas::with_pixel_size(w.max(1), h.max(1), scale);
+                    chart.dpr = f64::from(scale);
+                    chart.draw(&mut canvas);
+                    let rgba = canvas.to_rgba();
+                    let mut t = TransmitOptions::new(image_id);
                     t.columns = Some(u32::from(area.width));
                     t.rows = Some(u32::from(area.height));
                     let mut esc = Vec::new();
-                    kitty::transmit_virtual(image.as_term_image(), &t, &mut esc);
-                    state.pending = Some(if self.tmux { kitty::tmux_passthrough(&esc) } else { esc });
-                    state.sent = Some(key);
+                    kitty::transmit_virtual(
+                        RgbaImage::new(canvas.pixel_width(), canvas.pixel_height(), &rgba),
+                        &t,
+                        &mut esc,
+                    );
+                    esc
+                });
+                if let Some(esc) = frame {
+                    state.pending = Some(if tmux { kitty::tmux_passthrough(&esc) } else { esc });
+                    state.sent = Some(frame_key);
                 }
                 let (r, g, b) = kitty::placeholder_fg(state.image_id);
                 let style = Style::new().fg(Color::Rgb(r, g, b));
@@ -170,13 +325,11 @@ impl StatefulWidget for ChartWidget<'_> {
                 }
             }
             Graphics::Cells(mode) => {
-                let grid = kittychart::render_cells(
-                    self.config.clone(),
-                    u32::from(area.width),
-                    u32::from(area.height),
-                    mode,
-                    self.colors.as_ref().map(kittychart::Theme::from_terminal),
-                );
+                (state.area, state.scale, state.cells) = (area, 1.0, true);
+                let chart = state.chart_for(&self);
+                let mut canvas = CellCanvas::new(u32::from(area.width), u32::from(area.height), mode);
+                chart.draw(&mut canvas);
+                let grid = canvas.into_grid();
                 for row in 0..area.height {
                     for col in 0..area.width {
                         let c = grid.get(u32::from(col), u32::from(row));
@@ -244,6 +397,28 @@ mod tests {
         // Resized: re-sent.
         ChartWidget::new(&cfg, g).render(Rect::new(2, 1, 24, 6), &mut buf, &mut state);
         assert!(state.take_pending().is_some());
+    }
+
+    #[test]
+    fn hover_redraws_with_a_tooltip() {
+        let cfg = ChartConfig::from_json(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],"datasets":[{"label":"Sales","data":[1,3,2]}]},
+                "options":{"interaction":{"mode":"index","intersect":false}}}"#,
+        )
+        .unwrap();
+        let area = Rect::new(0, 0, 40, 12);
+        let mut buf = Buffer::empty(area);
+        let mut state = ChartState::new(1);
+        let g = Graphics::Cells(CellMode::Auto);
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        assert!(!state.handle_mouse(50, 50), "outside the widget");
+        assert!(state.handle_mouse(20, 6), "inside: hover changes");
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        let text: String = (0..12)
+            .map(|y| (0..40).map(|x| buf[(x, y)].symbol().to_owned()).collect::<String>() + "\n")
+            .collect();
+        assert!(text.contains("Sales: 3"), "tooltip:\n{text}");
+        assert!(state.clear_hover());
     }
 
     #[test]

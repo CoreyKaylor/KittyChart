@@ -9,16 +9,23 @@ authors.workspace = true
 
 [features]
 default = ["tty"]
-# The real-terminal adapter (raw mode, polling with a timeout). Unix only. Everything else in
-# this crate is sans-IO and always available.
-tty = ["dep:rustix"]
+# The real-terminal adapter (raw mode, reads with a timeout): Unix, and Windows (unverified).
+# Everything else in this crate is sans-IO and always available.
+tty = ["dep:rustix", "dep:windows-sys"]
 
 [dependencies]
 base64 = { workspace = true }
 flate2 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.6", optional = true, features = ["termios", "std"] }
+rustix = { version = "1.1.6", optional = true, features = ["termios", "std", "fs", "shm"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 kittychart-testkit = { workspace = true }

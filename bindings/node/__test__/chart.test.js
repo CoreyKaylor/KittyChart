@@ -158,3 +158,35 @@ test('ESM named imports work', async () => {
   const m = await import('kittychart')
   for (const name of ['Chart', 'show', 'probe', 'version']) assert.ok(name in m, name)
 })
+
+test('function options render like their static values', () => {
+  const data = [5, 15, 8, 12]
+  const cfg = (backgroundColor) => ({
+    type: 'bar',
+    data: { labels: ['a', 'b', 'c', 'd'], datasets: [{ label: 'Sales', data, backgroundColor }] },
+  })
+  const scripted = new Chart(cfg((ctx) => (ctx.raw > 10 ? '#ff0000' : '#0000ff'))).toRgba({ width: 400 })
+  const fixed = new Chart(cfg(data.map((v) => (v > 10 ? '#ff0000' : '#0000ff')))).toRgba({ width: 400 })
+  assert.ok(scripted.data.equals(fixed.data))
+})
+
+test('tick callbacks get Chart.js arguments', () => {
+  const money = (value, index, ticks) => {
+    assert.equal(ticks[index].value, value)
+    return 'USD ' + value
+  }
+  const c = new Chart({
+    type: 'bar',
+    data: { labels: ['a', 'b'], datasets: [{ label: 'Sales', data: [5, 15] }] },
+    options: { scales: { y: { ticks: { callback: money } } } },
+  })
+  assert.match(c.toText({ cols: 60, rows: 20 }), /USD 15/)
+})
+
+test('callback errors throw', () => {
+  const boom = () => {
+    throw new Error('bad color')
+  }
+  const c = new Chart({ type: 'bar', data: { labels: ['a'], datasets: [{ data: [1], backgroundColor: boom }] } })
+  assert.throws(() => c.toPng({ width: 200 }), /bad color/)
+})

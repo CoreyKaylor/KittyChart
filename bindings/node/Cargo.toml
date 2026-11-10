@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 [dependencies]
 kittychart = { workspace = true }
 napi = { version = "3.16.1", default-features = false, features = ["napi6"] }
+serde_json = { workspace = true }
 napi-derive = "3.7.0"
 
 [build-dependencies]
