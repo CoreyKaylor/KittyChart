@@ -438,6 +438,12 @@ fn placeholder_color(image_id: u32) -> (u8, u8, u8) {
     kittychart::term::kitty::placeholder_fg(image_id)
 }
 
+/// The other id of a double-buffered kitty image (see `kitty::alternate_id`).
+#[pyfunction]
+fn alternate_id(image_id: u32) -> u32 {
+    kittychart::term::kitty::alternate_id(image_id)
+}
+
 /// A fresh kitty image id.
 #[pyfunction]
 fn next_image_id() -> u32 {
@@ -582,7 +588,8 @@ impl Live {
         check(self.script.as_ref())?;
         let rgba = c.to_rgba();
         let img = kittychart::term::RgbaImage::new(c.pixel_width(), c.pixel_height(), &rgba);
-        let mut t = kitty::TransmitOptions::new(image_id.clamp(1, 0x00FF_FFFF));
+        // Any non-zero id: placeholders carry the top byte (double buffering uses it).
+        let mut t = kitty::TransmitOptions::new(image_id.max(1));
         t.columns = Some(cols);
         t.rows = Some(rows);
         t.placement_id = Some(1);
@@ -682,5 +689,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(placeholder_rows, m)?)?;
     m.add_function(wrap_pyfunction!(placeholder_color, m)?)?;
     m.add_function(wrap_pyfunction!(next_image_id, m)?)?;
+    m.add_function(wrap_pyfunction!(alternate_id, m)?)?;
     Ok(())
 }

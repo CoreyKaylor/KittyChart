@@ -78,6 +78,47 @@ fn textual_dashboard_draws_charts_updates_and_cleans_up() {
     assert!(placements(&r.term).is_empty(), "images deleted on exit");
 }
 
+/// New data animates through many frames, each under the other of the widget's two image ids
+/// (double buffering). Afterwards every placeholder must still name an image that exists:
+/// freeing the replaced image before Textual has written the lines that switch away from it
+/// blanks the chart.
+#[test]
+fn textual_updates_keep_every_chart_visible() {
+    let argv = py(&[&python_example("textual_dashboard.py")]);
+    let env = [("KITTYCHART_EXAMPLE_SEED", "7")];
+    let keys: Vec<Key> = [3000, 3600, 4200, 4800, 5400, 6000]
+        .map(|ms| Key { at: Duration::from_millis(ms), bytes: b" ".to_vec() })
+        .to_vec();
+    let r = run_full(&argv, &env, COLS, ROWS, true, &keys, Some(8500));
+    let p = placements(&r.term);
+    assert_eq!(p.len(), 2, "one image per chart: {p:?}");
+    assert_placeholders_name_live_images(&r.term);
+    assert_whole_images(&r.term, &p);
+}
+
+/// The opening animation runs by itself (its timer starts on mount, with no input): about a
+/// second at 30 frames per second, so the charts go out many times, and the bars end at
+/// their full height (seed 7: the tallest Signups bar is 39 on a 0–40 axis, in the top
+/// quarter).
+#[test]
+fn textual_initial_animation_runs() {
+    let argv = py(&[&python_example("textual_dashboard.py")]);
+    let env = [("KITTYCHART_EXAMPLE_SEED", "7")];
+    let r = run_full(&argv, &env, COLS, ROWS, true, &[], Some(6000));
+    let bar = placements(&r.term).into_iter().map(|p| p.image_id).min().expect("bar chart");
+    // Both charts' frames (each alternates between its id and that id's partner).
+    let frames = kittychart_testkit::kitty::decode_transmissions(&r.out.output).unwrap().len();
+    assert!(frames >= 20, "{frames} frames went out: no animation");
+    let (w, h, rgba) = image_rgba(&r.term, bar).unwrap();
+    let blue_on_top = rgba[..(w * h / 4 * 4) as usize]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] > 200 && p[2] > 150 && p[0] < 100)
+        .count();
+    assert!(blue_on_top > 100, "the bars stopped short of their final height ({blue_on_top} px up top)");
+}
+
 #[test]
 fn textual_falls_back_to_text() {
     let r = run(&py(&[&python_example("textual_dashboard.py")]), false, &[], Some(4000));
@@ -167,7 +208,9 @@ fn textual_hover_adds_a_tooltip() {
             .iter()
             .map(|p| (p.image_id, image_rgba(&r.term, p.image_id).unwrap().2))
             .collect();
-        v.sort_by_key(|(id, _)| *id); // ids follow mount order: the bar chart, then the line chart
+        // Ids follow mount order (the bar chart, then the line chart); each chart may be on its
+        // double-buffering partner id, which only differs in bit 24.
+        v.sort_by_key(|(id, _)| id & 0x00FF_FFFF);
         v
     };
     let still = images(&run_full(&argv, &env, COLS, ROWS, true, &[], Some(6000)));

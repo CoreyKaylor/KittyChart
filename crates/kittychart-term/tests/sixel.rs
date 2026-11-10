@@ -36,6 +36,27 @@ fn translucent_pixels_blend_onto_the_background() {
     assert!(close(&d.rgba, &[128, 128, 128, 255]), "{:?}", d.rgba);
 }
 
+/// Opaque mode (animation frames redrawn in place): transparent pixels are painted in the
+/// background color and the image says so (P2=0), so nothing from earlier frames shows through.
+#[test]
+fn opaque_images_paint_every_pixel() {
+    let rgba = [0, 0, 0, 0, 255, 0, 0, 255];
+    let opts = SixelOptions { background: Some([10, 20, 30]), opaque: true, ..SixelOptions::default() };
+    let mut out = Vec::new();
+    encode(RgbaImage::new(2, 1, &rgba), &opts, &mut out);
+    assert!(out.starts_with(b"\x1bP0;0;0q"), "{}", String::from_utf8_lossy(&out[..10]));
+    let d = roundtrip(2, 1, &rgba, &opts);
+    assert!(close(&d.rgba, &[10, 20, 30, 255, 255, 0, 0, 255]), "{:?}", d.rgba);
+    // Without it, the transparent pixel stays unset.
+    let mut out = Vec::new();
+    encode(
+        RgbaImage::new(2, 1, &rgba),
+        &SixelOptions { background: Some([10, 20, 30]), ..SixelOptions::default() },
+        &mut out,
+    );
+    assert!(out.starts_with(b"\x1bP0;1;0q"));
+}
+
 proptest! {
     #[test]
     fn few_color_images_roundtrip(

@@ -116,6 +116,11 @@ class ChartWidget(Widget):
         self._key: Any = None
         self._lines: list[Strip] = []
         self._sent = False
+        # Double buffering: the id of the last frame. Each new frame goes out under the other
+        # id, ahead of the lines (written in the same refresh) that switch to it, and the old
+        # image is freed afterwards (re-sending under one id blanks the image while it
+        # transfers).
+        self._last_id: Optional[int] = None
         # The live chart (hover, tooltip, legend toggles, animation) and what it was built for.
         self._kc_live: Any = None
         self._kc_live_key: Any = None
@@ -138,7 +143,9 @@ class ChartWidget(Widget):
     def on_unmount(self) -> None:
         if self._sent:
             info = _info()
-            self._write(_native.delete_image(self.image_id, bool(info and info["tmux"])))
+            tmux = bool(info and info["tmux"])
+            self._write(_native.delete_image(self.image_id, tmux))
+            self._write(_native.delete_image(_native.alternate_id(self.image_id), tmux))
 
     # Interaction: hover, click, animation.
 
@@ -188,7 +195,14 @@ class ChartWidget(Widget):
             self._kc_timer = None
 
     def on_mount(self) -> None:
-        self._kc_animate()
+        # The initial animation. (`is_mounted` is still False here, so not `_kc_animate`.)
+        if self._kc_timer is None:
+            self._kc_timer = self.set_interval(1 / 30, self._kc_tick)
+
+    def _kc_free(self, image_id: int, tmux: bool) -> None:
+        """Free a replaced frame's image, unless a later frame reused its id."""
+        if image_id != self._last_id:
+            self._write(_native.delete_image(image_id, tmux))
 
     def _write(self, data: bytes) -> None:
         driver = getattr(self.app, "_driver", None)
@@ -225,21 +239,32 @@ class ChartWidget(Widget):
         if self._kc_live is None or (self._kc_live_key[1], self._kc_live_key[2]) != (cells, str(colors)):
             self._kc_live = _native.Live(self.chart.to_json(), self.chart._dispatch, cells, colors)
         self._kc_live_key = live_key
-        self._kc_live.set_time((time.monotonic() - self._kc_start) * 1000.0)
         key = (width, height, mode)
-        if key == self._key and not self._kc_live.animating:
+        # New frames only when the widget asked for one (`_key = None` with a full refresh:
+        # the animation tick, hover, new data). Textual also repaints some lines on its own;
+        # those reuse the current lines, so every placeholder row names the same image. The
+        # clock only advances with a frame, so the tick sees the animation end only once its
+        # last frame has been drawn.
+        if key == self._key:
             return
         self._key = key
+        self._kc_live.set_time((time.monotonic() - self._kc_start) * 1000.0)
         if not cells:
-            esc = self._kc_live.render_kitty(
-                width, height, info["cell_width"], info["cell_height"], self.image_id, bool(info["tmux"])
-            )
+            tmux = bool(info["tmux"])
+            old = self._last_id
+            target = self.image_id if old is None else _native.alternate_id(old)
+            # Written now, before this frame's lines: the new image is complete by the time
+            # the placeholders switch to it.
+            esc = self._kc_live.render_kitty(width, height, info["cell_width"], info["cell_height"], target, tmux)
             self._write(esc)
             self._sent = True
-            style = Style(color=RichColor.from_rgb(*_native.placeholder_color(self.image_id)))
+            self._last_id = target
+            if old is not None:
+                # Runs after this refresh is written, possibly several frames later.
+                self.call_later(self._kc_free, old, tmux)
+            style = Style(color=RichColor.from_rgb(*_native.placeholder_color(target)))
             self._lines = [
-                Strip([Segment(row, style)], width)
-                for row in _native.placeholder_rows(self.image_id, width, height)
+                Strip([Segment(row, style)], width) for row in _native.placeholder_rows(target, width, height)
             ]
             return
         text_mode = mode if mode != "kitty" else "text"

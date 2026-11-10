@@ -6,25 +6,35 @@
 //! Without graphics, the chart is drawn with block and Braille characters.
 //!
 //! The widget never writes to the terminal itself (ratatui widgets only fill a buffer). After
-//! drawing, send the image with [`ChartState::take_pending`]:
+//! drawing, send the image with [`ChartState::take_pending`], and draw again while
+//! [`ChartState::needs_redraw`] says so:
 //!
 //! ```no_run
 //! # use kittychart_ratatui::{ChartState, ChartWidget, Graphics};
 //! # fn demo(terminal: &mut ratatui::DefaultTerminal, config: &kittychart::ChartConfig) -> std::io::Result<()> {
+//! use std::io::Write;
 //! let mut state = ChartState::new(1);
 //! let graphics = Graphics::Kitty { cell_width: 10.0, cell_height: 20.0 };
-//! terminal.draw(|f| {
-//!     f.render_stateful_widget(ChartWidget::new(config, graphics), f.area(), &mut state)
-//! })?;
-//! if let Some(bytes) = state.take_pending() {
-//!     use std::io::Write;
-//!     std::io::stdout().write_all(&bytes)?;
-//!     std::io::stdout().flush()?;
+//! loop {
+//!     terminal.draw(|f| {
+//!         f.render_stateful_widget(ChartWidget::new(config, graphics), f.area(), &mut state)
+//!     })?;
+//!     if let Some(bytes) = state.take_pending() {
+//!         std::io::stdout().write_all(&bytes)?;
+//!         std::io::stdout().flush()?;
+//!     }
+//!     if !state.needs_redraw() {
+//!         break;
+//!     }
 //! }
 //! # Ok(()) }
 //! ```
 //!
-//! The image is only re-sent when the chart, its size or the colors change.
+//! The image is only re-sent when the chart, its size, the colors or the hover state change.
+//! A changed image goes out under a second image id while the placeholders still show the
+//! current one; the next draw switches them over and frees the old image. (Re-sending under
+//! the same id makes the terminal drop the image until the transfer completes, which flickers.)
+//! So each state uses two ids: `image_id` and [`kitty::alternate_id`] of it.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -93,6 +103,14 @@ pub struct ChartState {
     image_id: u32,
     sent: Option<u64>,
     pending: Option<Vec<u8>>,
+    /// Double buffering (see [`kitty::alternate_id`]): the id the placeholders show, a frame
+    /// sent under the other id that the next draw switches to, and an id to delete once the
+    /// placeholders no longer show it.
+    shown: Option<u32>,
+    incoming: Option<u32>,
+    ready: Option<u32>,
+    /// A change came in during a switching draw (which sends nothing): draw again.
+    again: bool,
     /// The live chart, and what it was built for (chart type, colors, graphics).
     chart: Option<(u64, Chart)>,
     /// The config the chart shows (to animate to a changed one).
@@ -107,12 +125,17 @@ pub struct ChartState {
 }
 
 impl ChartState {
-    /// `image_id` must be unique among the images your app shows (1..=0xFFFFFF).
+    /// `image_id` must be unique among the images your app shows (1..=0xFFFFFF). The widget
+    /// also uses its partner `image_id | 1 << 24` ([`kitty::alternate_id`]) for double buffering.
     pub fn new(image_id: u32) -> Self {
         Self {
             image_id: image_id.clamp(1, 0x00FF_FFFF),
             sent: None,
             pending: None,
+            shown: None,
+            incoming: None,
+            ready: None,
+            again: false,
             chart: None,
             config_key: None,
             area: Rect::default(),
@@ -129,22 +152,39 @@ impl ChartState {
     }
 
     /// Escape sequences to write to the terminal after drawing (the image, when it changed).
+    ///
+    /// A changed image goes out under a second id while the placeholders keep showing the
+    /// current one, so nothing flickers while it transfers; [`ChartState::needs_redraw`] then
+    /// asks for one more draw, which switches the placeholders over and frees the old image.
     pub fn take_pending(&mut self) -> Option<Vec<u8>> {
-        self.pending.take()
+        let p = self.pending.take();
+        if p.is_some() {
+            self.ready = self.incoming.take().or(self.ready);
+        }
+        p
     }
 
-    /// Escapes that free this widget's image in the terminal (write them on exit; the image
-    /// otherwise stays in the terminal's memory after the placeholders are gone).
+    /// Whether to draw again right away: a new frame was sent and the placeholders should
+    /// switch to it.
+    pub fn needs_redraw(&self) -> bool {
+        self.ready.is_some() || self.again
+    }
+
+    /// Escapes that free this widget's images in the terminal (write them on exit; images
+    /// otherwise stay in the terminal's memory after the placeholders are gone).
     pub fn delete_image(&mut self, tmux: bool) -> Vec<u8> {
         self.sent = None;
+        (self.shown, self.incoming, self.ready, self.again) = (None, None, None, false);
         let mut out = Vec::new();
         kitty::delete_image(self.image_id, kitty::Quiet::Silent, &mut out);
+        kitty::delete_image(kitty::alternate_id(self.image_id), kitty::Quiet::Silent, &mut out);
         if tmux { kitty::tmux_passthrough(&out) } else { out }
     }
 
     /// Forget what was sent, e.g. after the terminal was cleared or images deleted.
     pub fn invalidate(&mut self) {
         self.sent = None;
+        (self.shown, self.incoming, self.ready, self.again) = (None, None, None, false);
     }
 
     /// The live chart, once drawn.
@@ -269,23 +309,37 @@ impl StatefulWidget for ChartWidget<'_> {
                     (area, (cell_width, cell_height), scale, false);
                 let tmux = self.tmux;
                 let key = self.key(area);
-                let image_id = state.image_id;
                 let prev_sent = state.sent;
+                let pointer = state.pointer;
+                // A frame sent after the last draw: show it now, and free the one it replaces
+                // (after this draw is flushed, when no placeholder shows it any more).
+                let mut retire = None;
+                let switching = state.ready.is_some();
+                if let Some(id) = state.ready.take() {
+                    retire = state.shown.replace(id);
+                }
+                // The first image goes straight to the placeholders (nothing to flicker); later
+                // ones to the other id.
+                let target = state.shown.map_or(state.image_id, kitty::alternate_id);
                 let chart = state.chart_for(&self);
-                // Something to show that wasn't sent: a new chart or size, hover, animation.
-                let changed = chart.is_animating() || !chart.active().is_empty() || chart.tooltip.is_some();
+                // Something to show that wasn't sent: a new chart, size, hover or legend state,
+                // or an animation frame.
                 let frame_key = {
                     let mut h = DefaultHasher::new();
                     key.hash(&mut h);
                     format!(
-                        "{:?}{:?}",
+                        "{:?}{:?}{:?}",
                         chart.active(),
-                        chart.legend.items.iter().map(|i| i.hidden).collect::<Vec<_>>()
+                        chart.legend.items.iter().map(|i| i.hidden).collect::<Vec<_>>(),
+                        pointer,
                     )
                     .hash(&mut h);
                     h.finish()
                 };
-                let frame = (prev_sent != Some(frame_key) || changed).then(|| {
+                // The draw that switches images sends nothing new (the next one will), which
+                // keeps an animation to one frame per draw.
+                let due = prev_sent != Some(frame_key) || chart.is_animating();
+                let frame = (due && !switching).then(|| {
                     let (w, h) = (
                         (f32::from(area.width) * cell_width).round() as u32,
                         (f32::from(area.height) * cell_height).round() as u32,
@@ -294,7 +348,7 @@ impl StatefulWidget for ChartWidget<'_> {
                     chart.dpr = f64::from(scale);
                     chart.draw(&mut canvas);
                     let rgba = canvas.to_rgba();
-                    let mut t = TransmitOptions::new(image_id);
+                    let mut t = TransmitOptions::new(target);
                     t.columns = Some(u32::from(area.width));
                     t.rows = Some(u32::from(area.height));
                     let mut esc = Vec::new();
@@ -305,21 +359,32 @@ impl StatefulWidget for ChartWidget<'_> {
                     );
                     esc
                 });
-                if let Some(esc) = frame {
-                    state.pending = Some(if tmux { kitty::tmux_passthrough(&esc) } else { esc });
-                    state.sent = Some(frame_key);
+                // A non-animation change (hover, resize) mustn't wait for the next event.
+                state.again = switching && prev_sent != Some(frame_key);
+                let mut esc = Vec::new();
+                if let Some(old) = retire {
+                    kitty::delete_image(old, kitty::Quiet::Silent, &mut esc);
                 }
-                let (r, g, b) = kitty::placeholder_fg(state.image_id);
+                if let Some(f) = frame {
+                    esc.extend_from_slice(&f);
+                    state.sent = Some(frame_key);
+                    if state.shown.is_none() {
+                        state.shown = Some(target);
+                    } else {
+                        state.incoming = Some(target);
+                    }
+                }
+                if !esc.is_empty() {
+                    state.pending = Some(if tmux { kitty::tmux_passthrough(&esc) } else { esc });
+                }
+                let shown = state.shown.unwrap_or(state.image_id);
+                let (r, g, b) = kitty::placeholder_fg(shown);
                 let style = Style::new().fg(Color::Rgb(r, g, b));
                 for row in 0..area.height {
                     for col in 0..area.width {
                         if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
-                            cell.set_symbol(&kitty::placeholder_cell(
-                                u32::from(row),
-                                u32::from(col),
-                                state.image_id,
-                            ))
-                            .set_style(style);
+                            cell.set_symbol(&kitty::placeholder_cell(u32::from(row), u32::from(col), shown))
+                                .set_style(style);
                         }
                     }
                 }
@@ -397,6 +462,71 @@ mod tests {
         // Resized: re-sent.
         ChartWidget::new(&cfg, g).render(Rect::new(2, 1, 24, 6), &mut buf, &mut state);
         assert!(state.take_pending().is_some());
+    }
+
+    /// A changed frame goes out under the other id while the placeholders keep the old one
+    /// (re-sending under the same id blanks the image until the transfer ends); the next draw
+    /// switches the placeholders and frees the old image.
+    #[test]
+    fn changed_frames_are_double_buffered() {
+        let cfg = config();
+        let area = Rect::new(0, 0, 20, 6);
+        let mut buf = Buffer::empty(area);
+        let mut state = ChartState::new(5);
+        let g = Graphics::Kitty { cell_width: 8.0, cell_height: 16.0 };
+        let id_of = |buf: &Buffer| {
+            kitty::placeholder_fg(5) == {
+                let Color::Rgb(r, g, b) = buf[(3, 3)].fg else { panic!() };
+                (r, g, b)
+            }
+        };
+        let third_diacritic = |buf: &Buffer| buf[(3, 3)].symbol().chars().nth(3);
+        let ids = |bytes: &[u8]| -> Vec<String> {
+            let s = String::from_utf8_lossy(bytes);
+            s.split("\x1b_G")
+                .filter_map(|c| {
+                    let keys = c.split(';').next()?;
+                    let a = keys.split(',').find(|k| k.starts_with("a="))?;
+                    let i = keys.split(',').find(|k| k.starts_with("i="))?;
+                    Some(format!("{a}:{i}"))
+                })
+                .collect()
+        };
+        let alt = kitty::alternate_id(5);
+
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        assert_eq!(
+            ids(&state.take_pending().unwrap()),
+            ["a=T:i=5"],
+            "first frame: straight to the placeholders"
+        );
+        assert!(!state.needs_redraw());
+        assert!(id_of(&buf) && third_diacritic(&buf).is_none());
+
+        // Hover: the new frame goes to the other id; the placeholders still show id 5.
+        assert!(state.handle_mouse(10, 3));
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        assert_eq!(ids(&state.take_pending().unwrap()), [format!("a=T:i={alt}")]);
+        assert!(third_diacritic(&buf).is_none(), "still the old image");
+        assert!(state.needs_redraw());
+
+        // The next draw switches to it and frees the old one, sending nothing new.
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        assert_eq!(third_diacritic(&buf).and_then(kitty::diacritic_index), Some(1), "id {alt}");
+        assert_eq!(ids(&state.take_pending().unwrap()), ["a=d:i=5"]);
+        assert!(!state.needs_redraw());
+
+        // And back: the next change goes to id 5 again.
+        assert!(state.clear_hover());
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        assert_eq!(ids(&state.take_pending().unwrap()), ["a=T:i=5"]);
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        assert_eq!(ids(&state.take_pending().unwrap()), [format!("a=d:i={alt}")]);
+        assert!(third_diacritic(&buf).is_none());
+
+        // Nothing changed: nothing to send or redraw.
+        ChartWidget::new(&cfg, g).render(area, &mut buf, &mut state);
+        assert!(state.take_pending().is_none() && !state.needs_redraw());
     }
 
     #[test]

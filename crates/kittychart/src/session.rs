@@ -102,6 +102,14 @@ pub struct Session {
     dirty: bool,
     last_frame: Option<f64>,
     sent: bool,
+    /// The kitty image on screen: `opts.image_id` or its [`kitty::alternate_id`]. Each frame
+    /// goes out under the other id and then the old image is deleted, because re-sending under
+    /// one id blanks the image until the transfer completes (a visible flicker with large
+    /// direct transfers).
+    shown: Option<u32>,
+    /// Clear the screen before the next frame: the terminal was resized, and what the last
+    /// size drew (sixel pixels, the old status line under a transparent image) would remain.
+    clear: bool,
 }
 
 impl Session {
@@ -120,6 +128,8 @@ impl Session {
             dirty: true,
             last_frame: None,
             sent: false,
+            shown: None,
+            clear: false,
         };
         s.rebuild();
         s
@@ -170,6 +180,8 @@ impl Session {
             (cols, rows, cell_width, cell_height);
         // Runtime state stays: the chart is sized at draw time anyway.
         if self.opts.region.is_none() {
+            // The session owns the whole screen.
+            self.clear = true;
             self.region.cols = cols.max(10);
             self.region.rows = rows.saturating_sub(u16::from(self.opts.status_line)).max(4);
         }
@@ -393,6 +405,9 @@ impl Session {
         self.chart.set_time(now);
         let mut out = Vec::new();
         out.extend_from_slice(b"\x1b7"); // save cursor
+        if std::mem::take(&mut self.clear) {
+            out.extend_from_slice(b"\x1b[2J");
+        }
         match self.mode {
             Mode::Text(cell) => self.draw_text(cell, &mut out),
             Mode::Sixel => self.draw_sixel(&mut out),
@@ -424,7 +439,8 @@ impl Session {
     fn draw_kitty(&mut self, out: &mut Vec<u8>) {
         let (w, h, rgba) = self.render_rgba();
         let img = RgbaImage::new(w, h, &rgba);
-        let mut t = TransmitOptions::new(self.opts.image_id);
+        let target = self.shown.map_or(self.opts.image_id, kitty::alternate_id);
+        let mut t = TransmitOptions::new(target);
         t.placement_id = Some(1);
         t.columns = Some(u32::from(self.region.cols));
         t.rows = Some(u32::from(self.region.rows));
@@ -438,6 +454,10 @@ impl Session {
         }
         let mut esc = Vec::new();
         kitty::transmit_and_display(img, &t, &mut esc);
+        // The new image is complete and placed: now the old one can go.
+        if let Some(old) = self.shown.replace(target) {
+            kitty::delete_image(old, kitty::Quiet::Silent, &mut esc);
+        }
         self.cursor_to(out, self.region.col, self.region.row);
         out.extend_from_slice(&if self.info.tmux { kitty::tmux_passthrough(&esc) } else { esc });
     }
@@ -450,7 +470,7 @@ impl Session {
         let bg = background.or(Some([0, 0, 0]));
         sixel::encode(
             RgbaImage::new(w, h, &rgba),
-            &SixelOptions { background: bg, ..SixelOptions::default() },
+            &SixelOptions { background: bg, opaque: true, ..SixelOptions::default() },
             out,
         );
     }
@@ -486,7 +506,7 @@ impl Session {
             return vec![];
         }
         let mut out = Vec::new();
-        kitty::delete_image(self.opts.image_id, kitty::Quiet::Silent, &mut out);
+        kitty::delete_image(self.shown.unwrap_or(self.opts.image_id), kitty::Quiet::Silent, &mut out);
         if self.info.tmux { kitty::tmux_passthrough(&out) } else { out }
     }
 }
@@ -548,6 +568,37 @@ mod tests {
         assert!(s.frame(40.0).is_some());
         assert!(s.frame(2000.0).is_some()); // the last animation frame
         assert!(s.frame(3000.0).is_none(), "idle: nothing to send");
+    }
+
+    /// Each kitty frame goes out under the other id and then frees the one it replaces (one
+    /// id re-sent in chunks shows nothing until the last chunk: a flicker).
+    #[test]
+    fn kitty_frames_alternate_ids() {
+        let mut s = session(Mode::Kitty);
+        let alt = kitty::alternate_id(7);
+        let f1 = s.frame(0.0).unwrap();
+        assert!(f1.windows(4).any(|w| w == b"i=7,") && !f1.windows(4).any(|w| w == b"a=d,"));
+        let f2 = String::from_utf8_lossy(&s.frame(40.0).unwrap()).into_owned();
+        let (send, free) = (f2.find(&format!("i={alt},")).unwrap(), f2.find("a=d,d=I,i=7,").unwrap());
+        assert!(send < free, "the new image goes out before the old one is freed");
+        let f3 = String::from_utf8_lossy(&s.frame(80.0).unwrap()).into_owned();
+        assert!(f3.contains("i=7,") && f3.contains(&format!("a=d,d=I,i={alt},")));
+        assert!(String::from_utf8_lossy(&s.cleanup()).contains("i=7,"), "frees the image on screen");
+    }
+
+    /// After a resize the next frame clears the screen first (old sixel pixels or a status line
+    /// left at the old size would remain), once.
+    #[test]
+    fn resize_clears_the_screen_once() {
+        let mut s = session(Mode::Sixel);
+        assert!(!contains(&s.frame(0.0).unwrap(), b"\x1b[2J"));
+        s.resize(60, 20, 10.0, 20.0);
+        assert!(s.frame(40.0).unwrap().starts_with(b"\x1b7\x1b[2J"));
+        assert!(!contains(&s.frame(80.0).unwrap(), b"\x1b[2J"));
+    }
+
+    fn contains(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
     }
 
     #[test]

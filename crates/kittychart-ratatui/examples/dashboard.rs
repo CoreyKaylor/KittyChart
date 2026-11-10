@@ -55,7 +55,11 @@ fn main() -> std::io::Result<()> {
     });
 
     let mut terminal = ratatui::init();
-    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableFocusChange
+    )?;
     let (mut s1, mut s2) = (ChartState::new(1), ChartState::new(2));
     let mut seed = 1;
     let start = std::time::Instant::now();
@@ -98,6 +102,10 @@ fn main() -> std::io::Result<()> {
             }
         }
         out.flush()?;
+        // A new frame went out under the other image id: draw again to switch to it.
+        if s1.needs_redraw() || s2.needs_redraw() {
+            continue;
+        }
         // While a chart animates, draw again soon; otherwise wait for input.
         let animating = s1.is_animating() || s2.is_animating();
         if !event::poll(Duration::from_millis(if animating { 16 } else { 1000 }))? {
@@ -106,6 +114,12 @@ fn main() -> std::io::Result<()> {
         match event::read()? {
             Event::Key(k) if k.code == KeyCode::Char('q') => break Ok(()),
             Event::Key(k) if k.code == KeyCode::Char(' ') => seed += 1,
+            // The pointer left the window (with focus-follows-mouse) or the window lost focus:
+            // terminals report no mouse-leave, so drop the hover here.
+            Event::FocusLost => {
+                s1.clear_hover();
+                s2.clear_hover();
+            }
             Event::Mouse(m) => match m.kind {
                 MouseEventKind::Moved => {
                     for s in [&mut s1, &mut s2] {
@@ -124,7 +138,11 @@ fn main() -> std::io::Result<()> {
             _ => {}
         }
     };
-    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
+    crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::DisableFocusChange,
+        crossterm::event::DisableMouseCapture
+    )?;
     ratatui::restore();
     if matches!(graphics, Graphics::Kitty { .. }) {
         let mut out = std::io::stdout();

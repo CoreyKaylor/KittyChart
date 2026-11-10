@@ -76,8 +76,13 @@ fn ratatui_dashboard_draws_both_charts_and_cleans_up() {
     let bin = built(&["-p", "kittychart-ratatui", "--example", "dashboard"], "examples/dashboard");
     let r = run(std::slice::from_ref(&bin), true, &[], Some(3000));
     let mut p = placements(&r.term);
-    p.sort_by_key(|p| p.image_id);
-    assert_eq!(p.iter().map(|p| (p.image_id, p.virtual_)).collect::<Vec<_>>(), [(1, true), (2, true)]);
+    // Each chart is on its id or that id's double-buffering partner (bit 24 set), never both.
+    p.sort_by_key(|p| p.image_id & 0x00FF_FFFF);
+    assert_eq!(
+        p.iter().map(|p| (p.image_id & 0x00FF_FFFF, p.virtual_)).collect::<Vec<_>>(),
+        [(1, true), (2, true)],
+        "{p:?}"
+    );
     let expected: u32 = p.iter().map(|p| p.grid.0 * p.grid.1).sum();
     assert_eq!(placeholder_cells(&r.term), expected as usize, "every chart cell is a placeholder");
 
@@ -86,7 +91,9 @@ fn ratatui_dashboard_draws_both_charts_and_cleans_up() {
     let r = run(&[bin], true, &keys, None);
     assert_eq!(r.out.exit, Some(0));
     let g = r.term.kitty_graphics().unwrap();
-    assert!(g.image(1).is_none() && g.image(2).is_none(), "images deleted on exit");
+    for id in [1, 2, 1 | 1 << 24, 2 | 1 << 24] {
+        assert!(g.image(id).is_none(), "image {id} deleted on exit");
+    }
 }
 
 #[test]
@@ -148,12 +155,17 @@ fn ratatui_dashboard_hover_adds_a_tooltip() {
             .count()
     };
     let still = run(std::slice::from_ref(&bin), true, &[], Some(2500));
-    let (_, _, before) = image_rgba(&still.term, 2).expect("chart 2");
+    let chart2 = |t| placements(t).into_iter().map(|p| p.image_id).find(|id| id & 0x00FF_FFFF == 2);
+    let (_, _, before) = image_rgba(&still.term, chart2(&still.term).expect("chart 2")).expect("chart 2");
     // crossterm captures the mouse in SGR cell mode: move to the middle of the right chart.
     let mv = Key { at: Duration::from_millis(1500), bytes: b"\x1b[<35;70;16M".to_vec() };
     let hovered = run(std::slice::from_ref(&bin), true, &[mv], Some(2500));
-    let (_, _, after) = image_rgba(&hovered.term, 2).expect("chart 2");
+    // Frames alternate between chart 2's two ids (double buffering) and the old image is
+    // deleted each time: still one image and placement per chart.
+    let placed = placements(&hovered.term);
+    assert_eq!(placed.len(), 2, "still one placement per chart: {placed:?}");
+    let id = placed.iter().map(|p| p.image_id).find(|id| id & 0x00FF_FFFF == 2).expect("chart 2");
+    let (_, _, after) = image_rgba(&hovered.term, id).expect("chart 2");
     assert_eq!(tooltip(&before), 0);
     assert!(tooltip(&after) > 500, "tooltip box in chart 2: {} px", tooltip(&after));
-    assert_eq!(placements(&hovered.term).len(), 2, "still one placement per chart");
 }

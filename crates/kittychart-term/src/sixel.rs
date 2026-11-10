@@ -21,11 +21,16 @@ pub struct SixelOptions {
     pub background: Option<Rgb>,
     /// Palette size, 2..=256. Most terminals support 256 color registers.
     pub max_colors: usize,
+    /// Paint every pixel, fully transparent ones in `background` (black without one), and
+    /// declare the image opaque (`P2=0`). For images redrawn in place, such as animation
+    /// frames: with transparent pixels, terminals keep what was there before (foot keeps the
+    /// older images underneath), so the previous frames show through.
+    pub opaque: bool,
 }
 
 impl Default for SixelOptions {
     fn default() -> Self {
-        Self { background: None, max_colors: 256 }
+        Self { background: None, max_colors: 256, opaque: false }
     }
 }
 
@@ -41,12 +46,13 @@ pub fn encode(img: RgbaImage<'_>, opts: &SixelOptions, out: &mut Vec<u8>) {
         .map(|p| {
             let a = p[3];
             match opts.background {
+                _ if a == 0 && opts.opaque => Some(opts.background.unwrap_or([0, 0, 0])),
                 _ if a == 0 => None,
                 Some(bg) => Some(std::array::from_fn(|i| {
                     ((u32::from(p[i]) * u32::from(a) + u32::from(bg[i]) * (255 - u32::from(a)) + 127) / 255)
                         as u8
                 })),
-                None if a < 128 => None,
+                None if a < 128 && !opts.opaque => None,
                 None => Some([p[0], p[1], p[2]]),
             }
         })
@@ -59,9 +65,10 @@ pub fn encode(img: RgbaImage<'_>, opts: &SixelOptions, out: &mut Vec<u8>) {
     let palette = median_cut(&hist, opts.max_colors.clamp(2, 256));
     let index: HashMap<Rgb, u8> = hist.keys().map(|&c| (c, nearest(&palette, c))).collect();
 
-    // DCS P1;P2;P3 q. P2 = 1: pixels with no sixel bit set keep the background. The raster
-    // attributes ("Pan;Pad;Ph;Pv) set a 1:1 pixel aspect and the image size.
-    out.extend_from_slice(b"\x1bP0;1;0q");
+    // DCS P1;P2;P3 q. P2 = 1: pixels with no sixel bit set keep the background (P2 = 0 for an
+    // opaque image: every pixel is set). The raster attributes ("Pan;Pad;Ph;Pv) set a 1:1 pixel
+    // aspect and the image size.
+    out.extend_from_slice(if opts.opaque { b"\x1bP0;0;0q" } else { b"\x1bP0;1;0q" });
     out.extend_from_slice(format!("\"1;1;{w};{h}").as_bytes());
     for (i, c) in palette.iter().enumerate() {
         let pct = |v: u8| (u32::from(v) * 100 + 127) / 255;

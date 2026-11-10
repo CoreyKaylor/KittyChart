@@ -271,6 +271,17 @@ pub fn tmux_passthrough(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The other id of a double-buffered image: `image_id` with bit 24 flipped.
+///
+/// Re-sending an image under the same id makes terminals drop the old one as soon as the
+/// first chunk arrives (Ghostty shows nothing until the last), so an image that changes often
+/// flickers. Sending each new frame under the other id, then switching to it and deleting the
+/// old one, never leaves a gap. Ids from 24-bit allocators stay unique: the partner differs in
+/// the most significant byte, which placeholders carry as a third diacritic.
+pub fn alternate_id(image_id: u32) -> u32 {
+    image_id ^ 0x0100_0000
+}
+
 /// Delete an image by id together with its placements and stored data (`a=d,d=I`).
 pub fn delete_image(image_id: u32, quiet: Quiet, out: &mut Vec<u8>) {
     write!(DisplayVec(out), "\x1b_Ga=d,d=I,i={image_id},q={}\x1b\\", quiet.value()).unwrap();

@@ -219,6 +219,91 @@ pub fn placeholder_positions(t: &Terminal<'_, '_>) -> Vec<(usize, usize, u32, u3
     out
 }
 
+/// The kitty image id each placeholder cell names (foreground color for the low 24 bits, third
+/// diacritic for the top byte), with the cells' screen positions: `{image id: [(row, col)]}`.
+/// Cells without a column diacritic (past the diacritic table) are skipped.
+#[allow(dead_code)]
+pub fn placeholder_image_ids(t: &Terminal<'_, '_>) -> std::collections::BTreeMap<u32, Vec<(usize, usize)>> {
+    use kittychart_term::kitty::{PLACEHOLDER, diacritic_index};
+    use libghostty_vt::render::{CellIterator, RenderState, RowIterator};
+    let mut rs = RenderState::new().unwrap();
+    let snap = rs.update(t).unwrap();
+    let mut rows_owner = RowIterator::new().unwrap();
+    let mut cells_owner = CellIterator::new().unwrap();
+    let mut rows = rows_owner.update(&snap).unwrap();
+    let mut out: std::collections::BTreeMap<u32, Vec<(usize, usize)>> = Default::default();
+    let mut y = 0;
+    while let Some(row) = rows.next() {
+        let mut cells = cells_owner.update(row).unwrap();
+        let mut x = 0;
+        while let Some(cell) = cells.next() {
+            let g = cell.graphemes().unwrap_or_default();
+            // More than three diacritics: libghostty-vt 0.2.2 with autowrap off (Textual's
+            // `?7l`) attaches the marks printed in the last column to the cell before it. Real
+            // Ghostty 1.4 doesn't (checked in a real window), so those cells are skipped.
+            if g.first() == Some(&PLACEHOLDER)
+                && (3..=4).contains(&g.len())
+                && let Some(fg) = cell.fg_color().unwrap()
+            {
+                let msb = g.get(3).and_then(|&c| diacritic_index(c)).unwrap_or(0);
+                let id = msb << 24 | u32::from(fg.r) << 16 | u32::from(fg.g) << 8 | u32::from(fg.b);
+                out.entry(id).or_default().push((y, x));
+            }
+            x += 1;
+        }
+        y += 1;
+    }
+    out
+}
+
+/// The graphemes (as code points) of `n` cells from `(row, col)`, for failure messages.
+#[allow(dead_code)]
+pub fn cell_graphemes(t: &Terminal<'_, '_>, row: usize, col: usize, n: usize) -> String {
+    use libghostty_vt::render::{CellIterator, RenderState, RowIterator};
+    let mut rs = RenderState::new().unwrap();
+    let snap = rs.update(t).unwrap();
+    let mut rows_owner = RowIterator::new().unwrap();
+    let mut cells_owner = CellIterator::new().unwrap();
+    let mut rows = rows_owner.update(&snap).unwrap();
+    let mut out = String::new();
+    let mut y = 0;
+    while let Some(r) = rows.next() {
+        if y == row {
+            let mut cells = cells_owner.update(r).unwrap();
+            let mut x = 0;
+            while let Some(cell) = cells.next() {
+                if (col..col + n).contains(&x) {
+                    let g = cell.graphemes().unwrap_or_default();
+                    let fg = cell.fg_color().unwrap().map(|c| format!("{:02x}{:02x}{:02x}", c.r, c.g, c.b));
+                    out += &format!(
+                        "  col {x}: {:?} fg {fg:?}\n",
+                        g.iter().map(|c| format!("{:X}", *c as u32)).collect::<Vec<_>>()
+                    );
+                }
+                x += 1;
+            }
+        }
+        y += 1;
+    }
+    out
+}
+
+/// Assert that every placeholder cell on screen names an image the terminal has (a cell
+/// naming a deleted or never-sent image shows nothing).
+#[allow(dead_code)]
+pub fn assert_placeholders_name_live_images(t: &Terminal<'_, '_>) {
+    let g = t.kitty_graphics().unwrap();
+    for (id, cells) in placeholder_image_ids(t) {
+        assert!(
+            g.image(id).is_some(),
+            "{} placeholder cells name image {id:#x}, which doesn't exist (row, col): {:?}\n{}",
+            cells.len(),
+            &cells[..cells.len().min(20)],
+            cells.first().map(|&(y, x)| cell_graphemes(t, y, x.saturating_sub(2), 5)).unwrap_or_default()
+        );
+    }
+}
+
 /// Assert that the placeholder cells form whole images: each run of cells shows consecutive
 /// image columns starting at 0, and the image rows count up from 0 down the screen.
 pub fn assert_whole_images(t: &Terminal<'_, '_>, placed: &[Placed]) {
