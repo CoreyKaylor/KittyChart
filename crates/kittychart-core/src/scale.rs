@@ -52,6 +52,7 @@ impl Position {
 pub enum ScaleKind {
     Category,
     Linear,
+    Logarithmic,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +60,8 @@ pub struct Tick {
     pub value: f64,
     pub label: Label,
     pub major: bool,
+    /// Logarithmic ticks: the mantissa step (1–9, 10, 15) that generated this tick.
+    pub significand: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -125,6 +128,8 @@ pub struct Scale {
     pub labels: Vec<Label>,
     /// Number of visible datasets bound to this scale (for `display: 'auto'`).
     pub visible_datasets: usize,
+    /// A logarithmic scale saw a zero value (`_zero`).
+    pub log_zero: bool,
 
     // Pixel mapping
     start_pixel: f64,
@@ -194,6 +199,7 @@ impl Scale {
             label_sizes: std::cell::RefCell::new(None),
             labels,
             visible_datasets: 0,
+            log_zero: false,
             start_pixel: 0.0,
             end_pixel: 0.0,
             reverse_pixels: false,
@@ -283,6 +289,8 @@ impl Scale {
                 Value::Null => None,
                 v => as_num(v).filter(|n| n.is_finite()),
             },
+            // Zero and negatives can't be plotted on a log axis; zero is noted via `note_zero`.
+            ScaleKind::Logarithmic => as_num(raw).filter(|n| n.is_finite() && *n > 0.0),
             ScaleKind::Category => {
                 if raw.is_null() {
                     return None;
@@ -356,6 +364,13 @@ impl Scale {
         (fin(min, fin(max, min)), fin(max, fin(min, max)))
     }
 
+    /// Logarithmic `parse`: a zero value is remembered (it plots at the scale minimum).
+    pub fn note_zero(&mut self, raw: &Value) {
+        if self.kind == ScaleKind::Logarithmic && as_num(raw) == Some(0.0) {
+            self.log_zero = true;
+        }
+    }
+
     /// `determineDataLimits` + `_addGrace`, given dataset ranges for this scale.
     pub fn determine_data_limits(&mut self, dataset_ranges: &[(f64, f64)]) {
         let (min, max) = self.min_max(dataset_ranges);
@@ -379,6 +394,11 @@ impl Scale {
                 self.max = if max.is_finite() { max } else { 1.0 };
                 self.handle_tick_range_options();
             }
+            ScaleKind::Logarithmic => {
+                self.determine_log_limits(min, max);
+                self.range = None;
+                return; // logarithmic scales don't apply grace
+            }
         }
         // _addGrace
         let grace = self.opts().get("grace").cloned();
@@ -386,6 +406,52 @@ impl Scale {
         let begin_at_zero = self.begin_at_zero();
         let keep_zero = |v: f64, add: f64| if begin_at_zero && v == 0.0 { 0.0 } else { v + add };
         self.range = Some((keep_zero(self.min, -change.abs()), keep_zero(self.max, change)));
+    }
+
+    fn determine_log_limits(&mut self, min: f64, max: f64) {
+        let change_exp = |v: f64, m: f64| 10f64.powf(v.log10().floor() + m);
+        // JS `null` for "no data"; `null <= 0` is true in the comparisons below.
+        let mut lmin: Option<f64> = min.is_finite().then(|| min.max(0.0));
+        let mut lmax: Option<f64> = max.is_finite().then(|| max.max(0.0));
+        if self.begin_at_zero() {
+            self.log_zero = true;
+        }
+        let user_min_finite = self.user.min.is_some_and(f64::is_finite);
+        if self.log_zero
+            && lmin != self.user.suggested_min
+            && !user_min_finite
+            && let Some(m) = lmin
+        {
+            lmin = Some(if min == change_exp(m, 0.0) { change_exp(m, -1.0) } else { change_exp(m, 0.0) });
+        }
+        let (_, _, min_defined, max_defined) = self.user_bounds();
+        let le0 = |v: Option<f64>| v.is_none_or(|v| v <= 0.0);
+        if lmin == lmax {
+            if le0(lmin) {
+                if !min_defined {
+                    lmin = Some(1.0);
+                }
+                if !max_defined {
+                    lmax = Some(10.0);
+                }
+            } else {
+                let (a, b) = (lmin.unwrap_or(1.0), lmax.unwrap_or(10.0));
+                if !min_defined {
+                    lmin = Some(change_exp(a, -1.0));
+                }
+                if !max_defined {
+                    lmax = Some(change_exp(b, 1.0));
+                }
+            }
+        }
+        if le0(lmin) && !min_defined {
+            lmin = lmax.map(|m| change_exp(m, -1.0));
+        }
+        if le0(lmax) && !max_defined {
+            lmax = lmin.map(|m| change_exp(m, 1.0));
+        }
+        self.min = lmin.unwrap_or(1.0);
+        self.max = lmax.unwrap_or(10.0);
     }
 
     fn handle_tick_range_options(&mut self) {
@@ -465,12 +531,32 @@ impl Scale {
                 let mut ticks = Vec::with_capacity(count);
                 let mut v = min;
                 while v <= max {
-                    ticks.push(Tick { value: v, label: Label::Text(String::new()), major: false });
+                    ticks.push(Tick {
+                        value: v,
+                        label: Label::Text(String::new()),
+                        major: false,
+                        significand: None,
+                    });
                     v += 1.0;
                 }
                 ticks
             }
             ScaleKind::Linear => self.build_linear_ticks(),
+            ScaleKind::Logarithmic => {
+                let mut ticks = generate_log_ticks(self.user.min, self.user.max, self.min, self.max);
+                if self.bounds_is_ticks() {
+                    for t in &ticks {
+                        if !t.value.is_nan() {
+                            self.min = self.min.min(t.value);
+                            self.max = self.max.max(t.value);
+                        }
+                    }
+                }
+                if self.reverse() {
+                    ticks.reverse();
+                }
+                ticks
+            }
         }
     }
 
@@ -503,7 +589,7 @@ impl Scale {
         }
         let mut ticks: Vec<Tick> = values
             .into_iter()
-            .map(|value| Tick { value, label: Label::Text(String::new()), major: false })
+            .map(|value| Tick { value, label: Label::Text(String::new()), major: false, significand: None })
             .collect();
         if self.reverse() {
             ticks.reverse();
@@ -557,6 +643,24 @@ impl Scale {
                     }
                 }
                 ScaleKind::Linear => Label::Text(format::numeric_tick(tick.value, i, &values)),
+                ScaleKind::Logarithmic => {
+                    // Ticks.formatters.logarithmic: label only "round" mantissas, plus the top 20%.
+                    let v = tick.value;
+                    let remain = tick
+                        .significand
+                        .filter(|s| *s != 0.0)
+                        .unwrap_or_else(|| v / 10f64.powf(v.log10().floor()));
+                    let label = if v == 0.0 {
+                        "0".to_owned()
+                    } else if [1.0, 2.0, 3.0, 5.0, 10.0, 15.0].contains(&remain)
+                        || (i as f64) > 0.8 * values.len() as f64
+                    {
+                        format::numeric_tick(v, i, &values)
+                    } else {
+                        String::new()
+                    };
+                    Label::Text(label)
+                }
             };
         }
     }
@@ -571,7 +675,7 @@ impl Scale {
                     js_number_to_string(value)
                 }
             }
-            ScaleKind::Linear => format::format_default(value),
+            ScaleKind::Linear | ScaleKind::Logarithmic => format::format_default(value),
         }
     }
 
@@ -605,6 +709,10 @@ impl Scale {
                 }
                 self.start_value = start;
                 self.value_range = end - start;
+            }
+            ScaleKind::Logarithmic => {
+                self.start_value = self.min.log10();
+                self.value_range = self.max.log10() - self.min.log10();
             }
         }
     }
@@ -801,8 +909,7 @@ impl Scale {
             Some(l) => l.min(determined),
             None => determined,
         };
-        let spacing = (self.ticks.len() as f64 / limit).max(1.0);
-        skip(&self.ticks, spacing)
+        auto_skip_ticks(&self.ticks, limit, self.ticks_opts().child("major").bool_or("enabled", false))
     }
 
     // ---------------------------------------------------------------- value <-> pixel
@@ -824,6 +931,15 @@ impl Scale {
     }
 
     pub fn pixel_for_value(&self, value: f64) -> f64 {
+        if self.kind == ScaleKind::Logarithmic {
+            // Zero (and values below the axis) plot at the minimum.
+            let v = if value == 0.0 { self.min } else { value };
+            if v.is_nan() {
+                return f64::NAN;
+            }
+            let d = if v == self.min { 0.0 } else { (v.log10() - self.start_value) / self.value_range };
+            return self.pixel_for_decimal(d);
+        }
         if value.is_nan() {
             return f64::NAN;
         }
@@ -832,7 +948,11 @@ impl Scale {
 
     pub fn value_for_pixel(&self, pixel: f64) -> f64 {
         let v = self.start_value + self.decimal_for_pixel(pixel) * self.value_range;
-        if self.kind == ScaleKind::Category { js_round(v) } else { v }
+        match self.kind {
+            ScaleKind::Category => js_round(v),
+            ScaleKind::Logarithmic => 10f64.powf(v),
+            ScaleKind::Linear => v,
+        }
     }
 
     pub fn pixel_for_tick(&self, index: usize) -> Option<f64> {
@@ -853,7 +973,7 @@ impl Scale {
     pub fn base_pixel(&self) -> f64 {
         match self.kind {
             ScaleKind::Category => self.bottom,
-            ScaleKind::Linear => self.pixel_for_value(self.base_value()),
+            ScaleKind::Linear | ScaleKind::Logarithmic => self.pixel_for_value(self.base_value()),
         }
     }
 
@@ -1440,20 +1560,154 @@ fn compute_label_sizes(ticks: &[Tick], limit: usize, font: &FontSpec, c: &mut dy
     }
 }
 
-/// `skip()` from autoskip without major ticks.
-fn skip(ticks: &[Tick], spacing: f64) -> Vec<Tick> {
-    let spacing = spacing.ceil();
+/// `autoSkip` from `core.scale.autoskip.js`, given the tick limit.
+fn auto_skip_ticks(ticks: &[Tick], limit: f64, major_enabled: bool) -> Vec<Tick> {
+    let majors: Vec<usize> = if major_enabled {
+        ticks.iter().enumerate().filter(|(_, t)| t.major).map(|(i, _)| i).collect()
+    } else {
+        vec![]
+    };
+    let n_major = majors.len();
     let mut out = Vec::new();
-    let mut count = 0.0;
-    let mut next = 0.0;
-    for (i, t) in ticks.iter().enumerate() {
-        if i as f64 == next {
-            out.push(t.clone());
-            count += 1.0;
-            next = js_round(count * spacing);
+    if n_major as f64 > limit {
+        // skipMajors
+        let spacing = (n_major as f64 / limit).ceil() as usize;
+        let mut count = 0;
+        let mut next = majors.first().copied();
+        for (i, t) in ticks.iter().enumerate() {
+            if Some(i) == next {
+                out.push(t.clone());
+                count += 1;
+                next = majors.get(count * spacing).copied();
+            }
         }
+        return out;
     }
+    // calculateSpacing
+    let spacing = {
+        let base = ticks.len() as f64 / limit;
+        match even_spacing(&majors) {
+            Some(even) => {
+                let factors = factorize(even as u64);
+                factors[..factors.len().saturating_sub(1)]
+                    .iter()
+                    .map(|f| *f as f64)
+                    .find(|f| *f > base)
+                    .unwrap_or_else(|| base.max(1.0))
+            }
+            None => base.max(1.0),
+        }
+    };
+    if n_major > 0 {
+        let first = majors[0] as f64;
+        let last = majors[n_major - 1] as f64;
+        let avg = (n_major > 1).then(|| js_round((last - first) / (n_major as f64 - 1.0)));
+        skip(ticks, &mut out, spacing, Some(avg.map_or(0.0, |a| first - a)), Some(first));
+        for w in majors.windows(2) {
+            skip(ticks, &mut out, spacing, Some(w[0] as f64), Some(w[1] as f64));
+        }
+        skip(ticks, &mut out, spacing, Some(last), Some(avg.map_or(ticks.len() as f64, |a| last + a)));
+        return out;
+    }
+    skip(ticks, &mut out, spacing, None, None);
     out
+}
+
+fn even_spacing(arr: &[usize]) -> Option<usize> {
+    if arr.len() < 2 {
+        return None;
+    }
+    let diff = arr[0];
+    arr.windows(2).all(|w| w[1] - w[0] == diff).then_some(diff)
+}
+
+/// `skip()` from autoskip.
+fn skip(ticks: &[Tick], out: &mut Vec<Tick>, spacing: f64, major_start: Option<f64>, major_end: Option<f64>) {
+    let start = major_start.unwrap_or(0.0);
+    let end = major_end.unwrap_or(ticks.len() as f64).min(ticks.len() as f64);
+    let mut spacing = spacing.ceil();
+    // JS: `if (majorEnd)` - a zero end is falsy.
+    if let Some(me) = major_end.filter(|v| *v != 0.0) {
+        let length = me - start;
+        spacing = length / (length / spacing).floor();
+    }
+    let mut count = 0.0;
+    let mut next = start;
+    while next < 0.0 {
+        count += 1.0;
+        next = js_round(start + count * spacing);
+    }
+    let mut i = start.max(0.0);
+    while i < end {
+        if i == next {
+            out.push(ticks[i as usize].clone());
+            count += 1.0;
+            next = js_round(start + count * spacing);
+        }
+        i += 1.0;
+    }
+}
+
+/// `generateTicks` from `scale.logarithmic.js`.
+fn generate_log_ticks(user_min: Option<f64>, user_max: Option<f64>, min: f64, max: f64) -> Vec<Tick> {
+    let log10_floor = |v: f64| v.log10().floor();
+    let is_major = |v: f64| v / 10f64.powf(log10_floor(v)) == 1.0;
+    let min = user_min.filter(|v| v.is_finite()).unwrap_or(min);
+    let steps = |min: f64, max: f64, range_exp: f64| {
+        let step = 10f64.powf(range_exp);
+        (max / step).ceil() - (min / step).floor()
+    };
+    let start_exp = {
+        let mut range_exp = log10_floor(max - min);
+        while steps(min, max, range_exp) > 10.0 {
+            range_exp += 1.0;
+        }
+        while steps(min, max, range_exp) < 10.0 {
+            range_exp -= 1.0;
+        }
+        range_exp.min(log10_floor(min))
+    };
+    let mut ticks = Vec::new();
+    let min_exp = log10_floor(min);
+    let mut exp = start_exp;
+    let mut precision = if exp < 0.0 { 10f64.powf(exp.abs()) } else { 1.0 };
+    let step_size = 10f64.powf(exp);
+    let base = if min_exp > exp { 10f64.powf(min_exp) } else { 0.0 };
+    let start = js_round((min - base) * precision) / precision;
+    let offset = ((min - base) / step_size / 10.0).floor() * step_size * 10.0;
+    let mut significand = ((start - offset) / 10f64.powf(exp)).floor();
+    let mut value = user_min
+        .filter(|v| v.is_finite())
+        .unwrap_or_else(|| js_round((base + offset + significand * 10f64.powf(exp)) * precision) / precision);
+    let mut guard = 0;
+    while value < max && guard < 10_000 {
+        guard += 1;
+        ticks.push(Tick {
+            value,
+            label: Label::Text(String::new()),
+            major: is_major(value),
+            significand: Some(significand),
+        });
+        if significand >= 10.0 {
+            significand = if significand < 15.0 { 15.0 } else { 20.0 };
+        } else {
+            significand += 1.0;
+        }
+        if significand >= 20.0 {
+            exp += 1.0;
+            significand = 2.0;
+            precision = if exp >= 0.0 { 1.0 } else { precision };
+        }
+        value = js_round((base + offset + significand * 10f64.powf(exp)) * precision) / precision;
+    }
+    let last = user_max.filter(|v| v.is_finite()).unwrap_or(value);
+    ticks.push(Tick {
+        value: last,
+        label: Label::Text(String::new()),
+        major: is_major(last),
+        significand: Some(significand),
+    });
+    ticks
 }
 
 fn align_start_end(align: &str, start: f64, end: f64) -> f64 {

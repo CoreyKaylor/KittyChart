@@ -109,6 +109,9 @@ impl Theme {
             "color": css(self.ink_secondary),
             "borderColor": css(self.grid),
             "backgroundColor": css(self.grid),
+            // Arc separators in the surface color read as gaps on any background (Chart.js's
+            // default white only works on white pages).
+            "elements": { "arc": { "borderColor": css(self.surface) } },
             "plugins": {
                 "title": { "color": css(self.ink_primary) },
                 "subtitle": { "color": css(self.ink_secondary) }

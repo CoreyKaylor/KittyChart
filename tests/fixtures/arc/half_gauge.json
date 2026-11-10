@@ -1,0 +1,9 @@
+{
+  "_kc": { "width": 400, "height": 240 },
+  "type": "doughnut",
+  "data": {
+    "labels": ["Used", "Free"],
+    "datasets": [{ "data": [68, 32], "backgroundColor": ["rgb(255, 99, 132)", "rgb(201, 203, 207)"] }]
+  },
+  "options": { "rotation": -90, "circumference": 180, "cutout": "70%", "aspectRatio": 1.6 }
+}

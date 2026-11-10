@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use kittychart_canvas::{Canvas, Color, LineCap, LineJoin, Paint, TextAlign};
 use serde_json::{Value, json};
 
+use crate::arc::{Arc, ArcOptions, ArcRadius, SpacingMode, angle_between};
 use crate::config::{ChartConfig, ChartType, Label};
 use crate::defaults::{BACKGROUND_COLORS, BORDER_COLORS, DEFAULTS, overrides_for};
 use crate::draw::{PointStyle, clip_area};
@@ -23,6 +24,8 @@ pub struct Parsed {
     pub y: Option<f64>,
     /// Floating bar `[start, end]`.
     pub custom: Option<FloatBar>,
+    /// Bubble radius (`r`), in pixels.
+    pub r: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +63,7 @@ pub struct DatasetMeta {
     pub parsed: Vec<Parsed>,
     pub points: Vec<Point>,
     pub line: Option<Line>,
+    pub arcs: Vec<Arc>,
     pub bars: Vec<Bar>,
     pub clip: Option<Padding>,
 }
@@ -226,6 +230,7 @@ impl Chart {
             &ov["datasets"][t],
             &ov["elements"][el],
             ov,
+            &self.theme_layer["elements"][el],
             &d["datasets"][t]["elements"][el],
             &d["datasets"][t],
             &d["elements"][el],
@@ -319,7 +324,11 @@ impl Chart {
             let ty = merged.get("type").and_then(Value::as_str).unwrap_or("linear").to_owned();
             let type_defaults = DEFAULTS["scales"].get(&ty).cloned().unwrap_or(json!({}));
             merge_if(&mut merged, &[&type_defaults, &self.theme_scale, &DEFAULTS["scale"]]);
-            let kind = if ty == "category" { ScaleKind::Category } else { ScaleKind::Linear };
+            let kind = match ty.as_str() {
+                "category" => ScaleKind::Category,
+                "logarithmic" => ScaleKind::Logarithmic,
+                _ => ScaleKind::Linear,
+            };
             let axis = if merged["axis"] == "y" { Axis::Y } else { Axis::X };
             // Routes: grid.color → borderColor, ticks/title color → color, border.color → borderColor.
             let grid_color = merged["grid"].get("color").cloned().unwrap_or(chart_border.clone());
@@ -369,7 +378,12 @@ impl Chart {
                 .and_then(Value::as_str)
                 .and_then(|id| self.scale_index(id))
                 .or(self.first_scale_for_axis(Axis::Y));
-            let (Some(x_scale), Some(y_scale)) = (x, y) else { continue };
+            // Arc charts have no cartesian scales (`linkScales() {}`); usize::MAX marks "none".
+            let (x_scale, y_scale) = match (x, y) {
+                _ if kind.is_arc() => (usize::MAX, usize::MAX),
+                (Some(x), Some(y)) => (x, y),
+                _ => continue,
+            };
             let stack = ds.get("stack").map(crate::config::js_to_string);
             let meta = DatasetMeta {
                 index: i,
@@ -385,12 +399,16 @@ impl Chart {
                 parsed: vec![],
                 points: vec![],
                 line: None,
+                arcs: vec![],
                 bars: vec![],
                 clip: None,
             };
             self.metas.push(meta);
         }
         for m in 0..self.metas.len() {
+            if self.metas[m].kind.is_arc() {
+                continue;
+            }
             let v = self.metas[m].v_scale();
             let st = self.scales[v].stacked();
             // isStacked: scale.stacked, or unset with a dataset `stack`.
@@ -413,6 +431,10 @@ impl Chart {
 
     fn parse_all(&mut self) {
         for m in 0..self.metas.len() {
+            if self.metas[m].kind.is_arc() {
+                self.metas[m].parsed = self.parse_arc_values(m);
+                continue;
+            }
             let parsed = self.parse_meta(m);
             self.metas[m].parsed = parsed;
         }
@@ -464,6 +486,9 @@ impl Chart {
                     let yr = a.and_then(|a| a.get(1)).cloned().unwrap_or(Value::Null);
                     p.x = self.parse_on(meta.x_scale, &xr, i);
                     p.y = self.parse_on(meta.y_scale, &yr, i);
+                    if meta.kind == ChartType::Bubble {
+                        p.r = a.and_then(|a| a.get(2)).and_then(as_num);
+                    }
                 }
                 Some(Value::Object(_)) => {
                     let xr = raw.get(&x_key).cloned().unwrap_or(Value::Null);
@@ -475,6 +500,10 @@ impl Chart {
                     } else {
                         p.x = self.parse_on(meta.x_scale, &xr, i);
                         p.y = self.parse_on(meta.y_scale, &yr, i);
+                        if meta.kind == ChartType::Bubble {
+                            // `item.r && +item.r`: a zero or missing r falls back to the option.
+                            p.r = raw.get("r").and_then(as_num).filter(|r| *r != 0.0);
+                        }
                     }
                 }
                 _ => {
@@ -492,6 +521,25 @@ impl Chart {
         out
     }
 
+    /// Doughnut `parse`: `+data[i]`, or `+data[i][parsing.key ?? 'value']` for objects.
+    fn parse_arc_values(&self, m: usize) -> Vec<Parsed> {
+        let ds = &self.datasets[self.metas[m].index];
+        let key = ds
+            .get("parsing")
+            .or_else(|| self.config.options.get("parsing"))
+            .and_then(|p| p.get("key"))
+            .and_then(Value::as_str)
+            .unwrap_or("value");
+        let data = ds["data"].as_array().cloned().unwrap_or_default();
+        let objects = data.first().is_some_and(Value::is_object);
+        data.iter()
+            .map(|raw| {
+                let v = if objects { raw.get(key).and_then(as_num) } else { as_num(raw) };
+                Parsed { y: v.filter(|v| v.is_finite()), ..Parsed::default() }
+            })
+            .collect()
+    }
+
     fn parse_on(&mut self, scale: usize, raw: &Value, index: usize) -> Option<f64> {
         let s = &mut self.scales[scale];
         if s.kind == ScaleKind::Category
@@ -502,6 +550,7 @@ impl Chart {
         {
             s.add_label_if_missing(raw);
         }
+        s.note_zero(raw);
         s.parse(raw, Some(index))
     }
 
@@ -523,6 +572,7 @@ impl Chart {
                 p.custom = Some(FloatBar { bar_start: bs, bar_end: be, start, end, min, max });
             }
         } else {
+            self.scales[vs].note_zero(raw);
             let v = self.scales[vs].parse(raw, Some(i));
             match vax {
                 Axis::X => p.x = v,
@@ -729,8 +779,10 @@ impl Chart {
             // getStyle(): line datasets use the dataset (line) element unless usePointStyle.
             let (el, idx) = match meta.kind {
                 ChartType::Line if !use_point_style => ("line", None),
-                ChartType::Line => ("point", Some(0)),
+                ChartType::Scatter if !use_point_style && self.shows_line(m) => ("line", None),
+                ChartType::Line | ChartType::Scatter | ChartType::Bubble => ("point", Some(0)),
                 ChartType::Bar => ("bar", Some(0)),
+                ChartType::Pie | ChartType::Doughnut => ("arc", Some(0)),
             };
             let s = self.element_scopes(ds, meta.kind, el);
             let bw = Padding::from_value(s.get_at("borderWidth", idx));
@@ -753,6 +805,9 @@ impl Chart {
                 dataset_index: ds,
             });
         }
+        if self.chart_type().is_arc() {
+            items = self.arc_legend_items(point_style_override);
+        }
         if l.bool_or("reverse", false) {
             items.reverse();
         }
@@ -770,14 +825,94 @@ impl Chart {
         );
     }
 
+    /// Doughnut/pie `generateLabels`: one item per data label, styled like dataset 0's arcs.
+    fn arc_legend_items(&self, point_style: Option<PointStyle>) -> Vec<LegendItem> {
+        let labels = self.config.labels();
+        let Some(m) = (0..self.metas.len()).find(|&m| self.metas[m].index == 0) else { return vec![] };
+        if self.datasets.is_empty() {
+            return vec![];
+        }
+        let meta = &self.metas[m];
+        let s = self.element_scopes(meta.index, meta.kind, "arc");
+        labels
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                let idx = Some(i);
+                LegendItem {
+                    text: label.clone(),
+                    fill_style: s.color_at("backgroundColor", idx),
+                    stroke_style: s.color_at("borderColor", idx),
+                    line_width: s.num_at("borderWidth", idx).unwrap_or(2.0),
+                    line_cap: LineCap::Butt,
+                    line_join: parse_join(s.str("borderJoinStyle")),
+                    line_dash: s.num_list("borderDash"),
+                    line_dash_offset: s.num_or("borderDashOffset", 0.0),
+                    point_style: point_style.unwrap_or_default(),
+                    rotation: 0.0,
+                    hidden: false,
+                    border_radius: None,
+                    dataset_index: meta.index,
+                }
+            })
+            .collect()
+    }
+
+    fn arc_options(&self, m: usize, i: usize) -> ArcOptions {
+        let meta = &self.metas[m];
+        let s = self.element_scopes(meta.index, meta.kind, "arc");
+        let ds = self.dataset_scopes(meta.index, meta.kind);
+        let idx = Some(i);
+        let radius = match s.get_at("borderRadius", idx) {
+            Some(Value::Object(o)) => {
+                let r = |k: &str| o.get(k).and_then(as_num).unwrap_or(0.0);
+                ArcRadius {
+                    outer_start: r("outerStart"),
+                    outer_end: r("outerEnd"),
+                    inner_start: r("innerStart"),
+                    inner_end: r("innerEnd"),
+                }
+            }
+            v => {
+                let n = v.and_then(as_num).unwrap_or(0.0);
+                ArcRadius { outer_start: n, outer_end: n, inner_start: n, inner_end: n }
+            }
+        };
+        ArcOptions {
+            background_color: s.color_at("backgroundColor", idx),
+            border_color: s.color_at("borderColor", idx),
+            border_width: s.num_at("borderWidth", idx).unwrap_or(2.0),
+            border_align_inner: s.str("borderAlign") == Some("inner"),
+            border_join: s
+                .get_at("borderJoinStyle", idx)
+                .and_then(Value::as_str)
+                .map(|j| parse_join(Some(j))),
+            border_dash: s.num_list("borderDash"),
+            border_dash_offset: s.num_or("borderDashOffset", 0.0),
+            border_radius: radius,
+            offset: s.num_at("offset", idx).unwrap_or(0.0),
+            // `spacing` lives on the dataset (not indexable).
+            spacing: ds.num("spacing").or_else(|| s.num("spacing")).unwrap_or(0.0),
+            spacing_mode: match ds.str("spacingMode").or_else(|| s.str("spacingMode")) {
+                Some("parallel") => SpacingMode::Parallel,
+                Some("proportional") => SpacingMode::Proportional,
+                _ => SpacingMode::Angular,
+            },
+            circular: s.bool_or("circular", true),
+        }
+    }
+
     // ------------------------------------------------------------------ element options
 
     fn point_options(&self, m: usize, i: usize) -> PointOptions {
         let meta = &self.metas[m];
         let s = self.element_scopes(meta.index, meta.kind, "point");
         let idx = Some(i);
+        // Bubble: the datum's `r` replaces the radius option.
+        let bubble_r =
+            (meta.kind == ChartType::Bubble).then(|| meta.parsed.get(i).and_then(|p| p.r)).flatten();
         PointOptions {
-            radius: s.num_at("radius", idx).unwrap_or(3.0),
+            radius: bubble_r.unwrap_or_else(|| s.num_at("radius", idx).unwrap_or(3.0)),
             hover_radius: s.num_at("hoverRadius", idx).unwrap_or(4.0),
             hit_radius: s.num_at("hitRadius", idx).unwrap_or(1.0),
             point_style: PointStyle::from_value(s.get_at("pointStyle", idx)),
@@ -843,30 +978,46 @@ impl Chart {
 
     // ------------------------------------------------------------------ update (after layout)
 
-    fn max_overflow(&self) -> f64 {
-        let mut pad: f64 = 0.0;
-        for m in 0..self.metas.len() {
-            let meta = &self.metas[m];
-            if meta.kind != ChartType::Line {
-                continue;
-            }
-            let n = meta.parsed.len();
-            if n == 0 {
-                continue;
-            }
-            // On the first update the line element has no options yet, so only points count.
-            let first = self.point_options(m, 0).size();
-            let last = self.point_options(m, n - 1).size();
-            pad = pad.max(first.max(last) / 2.0);
+    /// Whether a dataset draws a line element (line charts, and scatter with `showLine`).
+    fn shows_line(&self, m: usize) -> bool {
+        let meta = &self.metas[m];
+        match meta.kind {
+            ChartType::Line => true,
+            ChartType::Scatter => self.dataset_scopes(meta.index, meta.kind).bool_or("showLine", false),
+            _ => false,
         }
-        pad
+    }
+
+    /// `getMaxOverflow()`: how far a dataset's marks may extend past the chart area.
+    /// `line_border` is the line element's width once it has options (0 on the first update).
+    fn meta_overflow(&self, m: usize, line_border: f64) -> f64 {
+        let meta = &self.metas[m];
+        let n = meta.parsed.len();
+        if meta.kind == ChartType::Bar || meta.kind.is_arc() {
+            return 0.0;
+        }
+        if self.shows_line(m) {
+            if n == 0 {
+                return line_border;
+            }
+            return line_border.max(self.point_options(m, 0).size()).max(self.point_options(m, n - 1).size())
+                / 2.0;
+        }
+        // Scatter without a line, and bubble: every point counts.
+        (0..n).map(|i| self.point_options(m, i).size() / 2.0).fold(0.0, f64::max)
+    }
+
+    fn max_overflow(&self) -> f64 {
+        // On the first update the line element has no options yet, so only points count.
+        (0..self.metas.len()).map(|m| self.meta_overflow(m, 0.0)).fold(0.0, f64::max)
     }
 
     fn update_datasets(&mut self) {
         for m in 0..self.metas.len() {
             match self.metas[m].kind {
-                ChartType::Line => self.update_line(m),
+                ChartType::Line | ChartType::Scatter | ChartType::Bubble => self.update_line(m),
                 ChartType::Bar => self.update_bar(m),
+                ChartType::Pie | ChartType::Doughnut => self.update_arcs(m),
             }
             self.metas[m].clip = self.dataset_clip(m);
         }
@@ -874,6 +1025,9 @@ impl Chart {
 
     fn dataset_clip(&self, m: usize) -> Option<Padding> {
         let meta = &self.metas[m];
+        if meta.kind.is_arc() {
+            return None; // getMaxOverflow() is false: no clipping
+        }
         let ds = self.dataset_scopes(meta.index, meta.kind);
         if let Some(v) = ds.get("clip") {
             if v == &Value::Bool(false) {
@@ -881,18 +1035,8 @@ impl Chart {
             }
             return Some(Padding::from_value(Some(v)));
         }
-        let overflow = match meta.kind {
-            ChartType::Bar => 0.0,
-            ChartType::Line => {
-                let border = self.metas[m].line.as_ref().map_or(0.0, |l| l.options.border_width);
-                let n = meta.parsed.len();
-                if n == 0 {
-                    border
-                } else {
-                    border.max(self.point_options(m, 0).size()).max(self.point_options(m, n - 1).size()) / 2.0
-                }
-            }
-        };
+        let border = self.metas[m].line.as_ref().map_or(0.0, |l| l.options.border_width);
+        let overflow = self.meta_overflow(m, border);
         let clip_for = |s: &Scale| {
             let (_, _, min_def, max_def) = s.user_bounds();
             let (min, max) = (if min_def { 0.0 } else { overflow }, if max_def { 0.0 } else { overflow });
@@ -943,7 +1087,112 @@ impl Chart {
             prev = Some(*p);
         }
         self.metas[m].points = points;
-        self.metas[m].line = Some(Line { options: line_opts });
+        self.metas[m].line = self.shows_line(m).then_some(Line { options: line_opts });
+    }
+
+    fn arc_rotation(&self, m: usize) -> f64 {
+        let meta = &self.metas[m];
+        crate::math::to_radians(self.dataset_scopes(meta.index, meta.kind).num_or("rotation", 0.0) - 90.0)
+    }
+
+    fn arc_circumference(&self, m: usize) -> f64 {
+        let meta = &self.metas[m];
+        crate::math::to_radians(self.dataset_scopes(meta.index, meta.kind).num_or("circumference", 360.0))
+    }
+
+    fn ring_weight(&self, ds: usize) -> f64 {
+        self.datasets[ds].get("weight").and_then(as_num).unwrap_or(1.0).max(0.0)
+    }
+
+    /// `_getRingWeightOffset`: total weight of visible datasets before `ds`.
+    fn ring_weight_offset(&self, ds: usize) -> f64 {
+        (0..ds)
+            .filter(|&i| self.metas.iter().any(|m| m.index == i && m.visible))
+            .map(|i| self.ring_weight(i))
+            .sum()
+    }
+
+    /// The doughnut controller's `update()`.
+    fn update_arcs(&mut self, m: usize) {
+        let area = self.chart_area;
+        let meta = self.metas[m].clone();
+        let ds = self.dataset_scopes(meta.index, meta.kind);
+        let n = meta.parsed.len();
+
+        // getMaxBorderWidth(): from the first visible dataset's arcs.
+        let first_visible = (0..self.metas.len()).find(|&k| self.metas[k].visible);
+        let max_border = first_visible.map_or(0.0, |k| {
+            (0..self.metas[k].parsed.len())
+                .map(|i| {
+                    let o = self.arc_options(k, i);
+                    if o.border_align_inner { 0.0 } else { o.border_width }
+                })
+                .fold(0.0, f64::max)
+        });
+        let max_offset = (0..n).map(|i| self.arc_options(m, i).offset).fold(0.0, f64::max);
+        let spacing = max_border + max_offset + ds.num_or("spacing", 0.0);
+        let max_size = ((area.width().min(area.height()) - spacing) / 2.0).max(0.0);
+        let cutout = match ds.get("cutout") {
+            Some(Value::String(s)) if s.trim().ends_with('%') => {
+                s.trim().trim_end_matches('%').parse::<f64>().unwrap_or(0.0) / 100.0
+            }
+            Some(v) => as_num(v).map_or(0.0, |px| if max_size > 0.0 { px / max_size } else { 0.0 }),
+            None => 0.0,
+        }
+        .min(1.0);
+        let weight = self.ring_weight(meta.index);
+
+        // _getRotationExtents across visible datasets of this type.
+        let (mut rmin, mut rmax) = (std::f64::consts::TAU, -std::f64::consts::TAU);
+        for k in 0..self.metas.len() {
+            if self.metas[k].visible && self.metas[k].kind == meta.kind {
+                let r = self.arc_rotation(k);
+                rmin = rmin.min(r);
+                rmax = rmax.max(r + self.arc_circumference(k));
+            }
+        }
+        let (ratio_x, ratio_y, offset_x, offset_y) = ratio_and_offset(rmin, rmax - rmin, cutout);
+        let max_width = (area.width() - spacing) / ratio_x;
+        let max_height = (area.height() - spacing) / ratio_y;
+        let max_radius = (max_width.min(max_height) / 2.0).max(0.0);
+        let outer = crate::options::to_dimension(ds.get("radius").or(Some(&json!("100%"))), max_radius);
+        let inner_full = (outer * cutout).max(0.0);
+        let total_weight = {
+            let t = self.ring_weight_offset(self.datasets.len());
+            if t == 0.0 { 1.0 } else { t }
+        };
+        let radius_length = (outer - inner_full) / total_weight;
+        let (ox, oy) = (offset_x * outer, offset_y * outer);
+        let outer_radius = outer - radius_length * self.ring_weight_offset(meta.index);
+        let inner_radius = (outer_radius - radius_length * weight).max(0.0);
+
+        // calculateTotal / calculateCircumference
+        let total: f64 = meta.parsed.iter().filter_map(|p| p.y).map(f64::abs).sum();
+        let circumference = self.arc_circumference(m);
+        let arc_len = |v: Option<f64>| match v {
+            Some(v) if total > 0.0 && meta.visible => {
+                std::f64::consts::TAU * ((v * circumference / std::f64::consts::TAU).abs() / total)
+            }
+            _ => 0.0,
+        };
+        let (cx, cy) = ((area.left + area.right) / 2.0, (area.top + area.bottom) / 2.0);
+        let mut start = self.arc_rotation(m);
+        let mut arcs = Vec::with_capacity(n);
+        for (i, p) in meta.parsed.iter().enumerate() {
+            let len = arc_len(p.y);
+            arcs.push(Arc {
+                x: cx + ox,
+                y: cy + oy,
+                start_angle: start,
+                end_angle: start + len,
+                circumference: len,
+                inner_radius,
+                outer_radius,
+                options: self.arc_options(m, i),
+            });
+            start += len;
+        }
+        self.metas[m].arcs = arcs;
     }
 
     fn update_bar(&mut self, m: usize) {
@@ -1263,13 +1512,18 @@ impl Chart {
             );
         }
         match meta.kind {
-            ChartType::Line => {
+            ChartType::Line | ChartType::Scatter | ChartType::Bubble => {
                 if let Some(line) = meta.line.clone() {
                     line.update_control_points(&mut meta.points, &area, meta.index_axis == Axis::X);
                     line.draw(c, &meta.points);
                 }
                 for p in &meta.points {
                     p.draw(c, &area);
+                }
+            }
+            ChartType::Pie | ChartType::Doughnut => {
+                for a in &meta.arcs {
+                    a.draw(c);
                 }
             }
             ChartType::Bar => {
@@ -1386,7 +1640,31 @@ fn apply_colors_plugin(config: &ChartConfig, theme: Option<&crate::theme::Theme>
     if defined && !force {
         return datasets;
     }
+    let chart_type = config.chart_type;
+    let mut color_index = 0;
     for (i, ds) in datasets.iter_mut().enumerate() {
+        let kind = ds.get("type").and_then(Value::as_str).and_then(ChartType::parse).unwrap_or(chart_type);
+        if kind.is_arc() {
+            // colorizeDoughnutDataset: one solid border-palette color per data point.
+            let n = ds["data"].as_array().map_or(0, Vec::len);
+            let colors: Vec<Value> = (0..n)
+                .map(|_| {
+                    let c = match theme {
+                        Some(t) => t.border_color(color_index),
+                        None => BORDER_COLORS[color_index % BORDER_COLORS.len()].to_owned(),
+                    };
+                    color_index += 1;
+                    json!(c)
+                })
+                .collect();
+            if let Some(obj) = ds.as_object_mut() {
+                obj.insert("backgroundColor".into(), Value::Array(colors));
+            }
+            continue;
+        }
+        let _ = i;
+        let i = color_index;
+        color_index += 1;
         if let Some(obj) = ds.as_object_mut() {
             let (border, fill) = match theme {
                 Some(t) => (t.border_color(i), t.fill_color(i)),
@@ -1400,6 +1678,28 @@ fn apply_colors_plugin(config: &ChartConfig, theme: Option<&crate::theme::Theme>
         }
     }
     datasets
+}
+
+/// `getRatioAndOffset`: how much of the circle a partial doughnut occupies, so it can be
+/// scaled up and centered.
+fn ratio_and_offset(rotation: f64, circumference: f64, cutout: f64) -> (f64, f64, f64, f64) {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    if circumference >= TAU {
+        return (1.0, 1.0, 0.0, 0.0);
+    }
+    let (start, end) = (rotation, rotation + circumference);
+    let (sx, sy, ex, ey) = (start.cos(), start.sin(), end.cos(), end.sin());
+    let calc_max = |angle: f64, a: f64, b: f64| {
+        if angle_between(angle, start, end, true) { 1.0 } else { a.max(a * cutout).max(b).max(b * cutout) }
+    };
+    let calc_min = |angle: f64, a: f64, b: f64| {
+        if angle_between(angle, start, end, true) { -1.0 } else { a.min(a * cutout).min(b).min(b * cutout) }
+    };
+    let max_x = calc_max(0.0, sx, ex);
+    let max_y = calc_max(FRAC_PI_2, sy, ey);
+    let min_x = calc_min(PI, sx, ex);
+    let min_y = calc_min(PI + FRAC_PI_2, sy, ey);
+    ((max_x - min_x) / 2.0, (max_y - min_y) / 2.0, -(max_x + min_x) / 2.0, -(max_y + min_y) / 2.0)
 }
 
 /// `setBorderSkipped`.

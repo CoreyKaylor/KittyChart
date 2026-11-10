@@ -94,3 +94,23 @@ fn logical_size_is_independent_of_dpr() {
         assert!((c.height() - 50.0).abs() < 1.0 / dpr, "dpr {dpr}");
     }
 }
+
+#[test]
+fn non_finite_path_arguments_are_ignored() {
+    // As in browsers: a NaN arc (e.g. 0/0 angles from a pie's zero inner radius) must not
+    // corrupt the rest of the path.
+    let mut c = SkiaCanvas::new(20.0, 20.0, 1.0);
+    c.begin_path();
+    c.move_to(2.0, 2.0);
+    c.line_to(18.0, 2.0);
+    c.arc(10.0, 10.0, 0.0, f32::NAN, f32::NAN, true);
+    c.line_to(f32::INFINITY, 5.0);
+    c.line_to(18.0, 18.0);
+    c.close_path();
+    c.set_fill_style(Color::BLACK.into());
+    c.fill();
+    let px = c.to_rgba();
+    let at = |x: usize, y: usize| px[(y * 20 + x) * 4 + 3];
+    assert_eq!(at(16, 6), 255, "triangle interior is filled");
+    assert_eq!(at(3, 16), 0, "outside stays clear");
+}

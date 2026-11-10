@@ -3,9 +3,9 @@
 Chart.js-class charts for graphics-capable terminals (kitty, Ghostty and other libghostty
 terminals, WezTerm, …), from a Rust core with Python, Node and C bindings.
 
-> Status: **M1, line and bar charts**: category/linear scales, stacking, floating and horizontal
+> Status: **M2 in progress**: line, bar, scatter, bubble, pie and doughnut charts; category, linear and logarithmic scales; stacking, floating and horizontal
 > bars, title/subtitle/legend, rendered in the terminal through the kitty graphics protocol.
-> Pie/doughnut/radar/polar/scatter/bubble, log/time scales, and fallbacks for non-kitty terminals
+> Radar/polar area, time scales, area fill, and fallbacks for non-kitty terminals
 > are next.
 
 ```sh

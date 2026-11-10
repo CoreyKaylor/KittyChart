@@ -42,6 +42,10 @@ pub struct SkiaCanvas {
     has_current_point: bool,
 }
 
+fn finite(v: &[f32]) -> bool {
+    v.iter().all(|x| x.is_finite())
+}
+
 impl std::fmt::Debug for SkiaCanvas {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SkiaCanvas")
@@ -329,11 +333,17 @@ impl Canvas for SkiaCanvas {
         self.has_current_point = false;
     }
     fn move_to(&mut self, x: f32, y: f32) {
+        if !finite(&[x, y]) {
+            return; // Canvas spec: non-finite arguments make the call a no-op
+        }
         let (x, y) = self.device_point(x, y);
         self.path.move_to(x, y);
         self.has_current_point = true;
     }
     fn line_to(&mut self, x: f32, y: f32) {
+        if !finite(&[x, y]) {
+            return; // Canvas spec: non-finite arguments make the call a no-op
+        }
         let (x, y) = self.device_point(x, y);
         if self.has_current_point {
             self.path.line_to(x, y);
@@ -343,6 +353,9 @@ impl Canvas for SkiaCanvas {
         }
     }
     fn quadratic_curve_to(&mut self, cpx: f32, cpy: f32, x: f32, y: f32) {
+        if !finite(&[cpx, cpy, x, y]) {
+            return; // Canvas spec: non-finite arguments make the call a no-op
+        }
         if !self.has_current_point {
             self.move_to(cpx, cpy);
         }
@@ -351,6 +364,9 @@ impl Canvas for SkiaCanvas {
         self.path.quad_to(cx, cy, x, y);
     }
     fn bezier_curve_to(&mut self, cp1x: f32, cp1y: f32, cp2x: f32, cp2y: f32, x: f32, y: f32) {
+        if !finite(&[cp1x, cp1y, cp2x, cp2y, x, y]) {
+            return; // Canvas spec: non-finite arguments make the call a no-op
+        }
         if !self.has_current_point {
             self.move_to(cp1x, cp1y);
         }
@@ -360,6 +376,9 @@ impl Canvas for SkiaCanvas {
         self.path.cubic_to(ax, ay, bx, by, x, y);
     }
     fn arc(&mut self, cx: f32, cy: f32, r: f32, start: f32, end: f32, ccw: bool) {
+        if !finite(&[cx, cy, r, start, end]) {
+            return; // Canvas spec: non-finite arguments make the call a no-op
+        }
         if r < 0.0 || !r.is_finite() {
             return;
         }
@@ -431,6 +450,9 @@ impl Canvas for SkiaCanvas {
         self.state.transform = saved;
     }
     fn rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        if !finite(&[x, y, w, h]) {
+            return; // Canvas spec: non-finite arguments make the call a no-op
+        }
         self.move_to(x, y);
         self.line_to(x + w, y);
         self.line_to(x + w, y + h);

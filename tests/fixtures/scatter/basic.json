@@ -1,0 +1,11 @@
+{
+  "_kc": { "width": 560, "height": 300 },
+  "type": "scatter",
+  "data": {
+    "datasets": [
+      { "label": "Cluster A", "data": [{"x": -10, "y": 0}, {"x": 0, "y": 10}, {"x": 10, "y": 5}, {"x": 0.5, "y": 5.5}, {"x": -4, "y": 7}, {"x": 7, "y": -3}] },
+      { "label": "Trend (showLine)", "showLine": true, "data": [[-12, -6], [-6, -2], [0, 1], [6, 4], [12, 9]] }
+    ]
+  },
+  "options": { "plugins": { "title": { "display": true, "text": "Scatter" } } }
+}

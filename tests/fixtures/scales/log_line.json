@@ -1,0 +1,12 @@
+{
+  "_kc": { "width": 560, "height": 300 },
+  "type": "line",
+  "data": {
+    "labels": ["v1", "v2", "v3", "v4", "v5", "v6", "v7"],
+    "datasets": [
+      { "label": "Downloads", "data": [3, 40, 220, 1800, 12000, 95000, 700000] },
+      { "label": "Issues", "data": [1, 8, 15, 90, 300, 2400, 9000] }
+    ]
+  },
+  "options": { "scales": { "y": { "type": "logarithmic" } } }
+}

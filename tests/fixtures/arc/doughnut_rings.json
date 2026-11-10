@@ -1,0 +1,12 @@
+{
+  "_kc": { "width": 420, "height": 320 },
+  "type": "doughnut",
+  "data": {
+    "labels": ["Rust", "Go", "Zig", "C"],
+    "datasets": [
+      { "label": "2025", "data": [40, 25, 10, 25], "spacing": 4, "borderRadius": 6, "borderWidth": 0 },
+      { "label": "2026", "data": [55, 20, 15, 10], "weight": 2, "spacing": 4, "borderRadius": 6, "borderWidth": 0 }
+    ]
+  },
+  "options": { "cutout": "45%", "plugins": { "legend": { "position": "bottom" } } }
+}

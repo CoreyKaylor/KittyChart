@@ -4,6 +4,7 @@
 //! The engine is pure computation over a canvas: no I/O, no clocks, no globals beyond
 //! immutable defaults. The same config always produces the same pixels.
 
+pub mod arc;
 pub mod chart;
 pub mod color;
 pub mod config;

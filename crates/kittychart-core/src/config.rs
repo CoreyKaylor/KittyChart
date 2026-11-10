@@ -15,13 +15,17 @@ pub enum ConfigError {
     BadData(usize),
 }
 
-const SUPPORTED_TYPES: &str = "line, bar";
+const SUPPORTED_TYPES: &str = "line, bar, scatter, bubble, pie, doughnut";
 
 /// Chart and dataset types with a controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChartType {
     Line,
     Bar,
+    Scatter,
+    Bubble,
+    Pie,
+    Doughnut,
 }
 
 impl ChartType {
@@ -29,6 +33,10 @@ impl ChartType {
         match s {
             "line" => Some(Self::Line),
             "bar" => Some(Self::Bar),
+            "scatter" => Some(Self::Scatter),
+            "bubble" => Some(Self::Bubble),
+            "pie" => Some(Self::Pie),
+            "doughnut" => Some(Self::Doughnut),
             _ => None,
         }
     }
@@ -36,7 +44,21 @@ impl ChartType {
         match self {
             Self::Line => "line",
             Self::Bar => "bar",
+            Self::Scatter => "scatter",
+            Self::Bubble => "bubble",
+            Self::Pie => "pie",
+            Self::Doughnut => "doughnut",
         }
+    }
+
+    /// Controllers built on arc elements around a center, without cartesian scales.
+    pub fn is_arc(self) -> bool {
+        matches!(self, Self::Pie | Self::Doughnut)
+    }
+
+    /// Controllers built on point elements (line, scatter, bubble).
+    pub fn uses_points(self) -> bool {
+        matches!(self, Self::Line | Self::Scatter | Self::Bubble)
     }
 }
 
@@ -190,7 +212,10 @@ mod tests {
     fn normalizes_and_rejects() {
         let c = ChartConfig::from_json(r#"{"type":"bar","data":{"datasets":[{"data":null}]}}"#).unwrap();
         assert_eq!(c.datasets()[0]["data"], serde_json::json!([]));
-        assert!(matches!(ChartConfig::from_json(r#"{"type":"pie"}"#), Err(ConfigError::UnsupportedType(_))));
+        assert!(matches!(
+            ChartConfig::from_json(r#"{"type":"funnel"}"#),
+            Err(ConfigError::UnsupportedType(_))
+        ));
         assert!(matches!(ChartConfig::from_json(r#"{"data":{}}"#), Err(ConfigError::MissingType)));
     }
 }

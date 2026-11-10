@@ -48,6 +48,19 @@ pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
                 "radius": 3,
                 "rotation": 0
             },
+            "arc": {
+                "borderAlign": "center",
+                "borderColor": "#fff",
+                "borderDash": [],
+                "borderDashOffset": 0,
+                "borderRadius": 0,
+                "borderWidth": 2,
+                "offset": 0,
+                "spacing": 0,
+                "spacingMode": "angular",
+                "circular": true,
+                "selfJoin": false
+            },
             "bar": {
                 "borderSkipped": "start",
                 "borderWidth": 0,
@@ -57,7 +70,17 @@ pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
         },
         "datasets": {
             "line": { "showLine": true, "spanGaps": false },
-            "bar": { "categoryPercentage": 0.8, "barPercentage": 0.9, "grouped": true }
+            "bar": { "categoryPercentage": 0.8, "barPercentage": 0.9, "grouped": true },
+            "scatter": { "showLine": false, "fill": false },
+            "doughnut": {
+                "cutout": "50%", "rotation": 0, "circumference": 360, "radius": "100%",
+                "spacing": 0, "spacingMode": "angular", "indexAxis": "r"
+            },
+            "pie": {
+                "cutout": 0, "rotation": 0, "circumference": 360, "radius": "100%",
+                "spacing": 0, "spacingMode": "angular", "indexAxis": "r"
+            },
+            "bubble": {}
         },
         "plugins": {
             "colors": { "enabled": true, "forceOverride": false },
@@ -132,7 +155,8 @@ pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
         },
         "scales": {
             "category": {},
-            "linear": {}
+            "linear": {},
+            "logarithmic": { "ticks": { "major": { "enabled": true } } }
         }
     })
 });
@@ -151,7 +175,16 @@ pub static OVERRIDES: LazyLock<Value> = LazyLock::new(|| {
                 "_index_": { "type": "category", "offset": true, "grid": { "offset": true } },
                 "_value_": { "type": "linear", "beginAtZero": true }
             }
-        }
+        },
+        "scatter": {
+            "interaction": { "mode": "point" },
+            "scales": { "x": { "type": "linear" }, "y": { "type": "linear" } }
+        },
+        "bubble": {
+            "scales": { "x": { "type": "linear" }, "y": { "type": "linear" } }
+        },
+        "doughnut": { "aspectRatio": 1 },
+        "pie": { "aspectRatio": 1 }
     })
 });
 
