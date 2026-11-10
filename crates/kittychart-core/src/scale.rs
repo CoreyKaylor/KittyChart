@@ -4,6 +4,8 @@
 use kittychart_canvas::{Canvas, Color, Paint, TextAlign, TextBaseline};
 use serde_json::Value;
 
+mod timescale;
+
 use crate::config::{Label, js_number_to_string};
 use crate::draw::{TextOpts, clip_area, render_text};
 use crate::format;
@@ -53,6 +55,14 @@ pub enum ScaleKind {
     Category,
     Linear,
     Logarithmic,
+    Time,
+    TimeSeries,
+}
+
+impl ScaleKind {
+    pub fn is_time(self) -> bool {
+        matches!(self, ScaleKind::Time | ScaleKind::TimeSeries)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +140,9 @@ pub struct Scale {
     pub visible_datasets: usize,
     /// A logarithmic scale saw a zero value (`_zero`).
     pub log_zero: bool,
+    /// Time scales: every parsed data timestamp on this axis (sorted, unique), set by the chart.
+    pub data_timestamps: Vec<f64>,
+    time: timescale::TimeState,
 
     // Pixel mapping
     start_pixel: f64,
@@ -200,6 +213,8 @@ impl Scale {
             labels,
             visible_datasets: 0,
             log_zero: false,
+            data_timestamps: vec![],
+            time: timescale::TimeState::default(),
             start_pixel: 0.0,
             end_pixel: 0.0,
             reverse_pixels: false,
@@ -291,6 +306,7 @@ impl Scale {
             },
             // Zero and negatives can't be plotted on a log axis; zero is noted via `note_zero`.
             ScaleKind::Logarithmic => as_num(raw).filter(|n| n.is_finite() && *n > 0.0),
+            ScaleKind::Time | ScaleKind::TimeSeries => self.parse_time(raw),
             ScaleKind::Category => {
                 if raw.is_null() {
                     return None;
@@ -398,6 +414,11 @@ impl Scale {
                 self.determine_log_limits(min, max);
                 self.range = None;
                 return; // logarithmic scales don't apply grace
+            }
+            ScaleKind::Time | ScaleKind::TimeSeries => {
+                self.determine_time_limits(dataset_ranges);
+                self.range = None;
+                return;
             }
         }
         // _addGrace
@@ -508,12 +529,12 @@ impl Scale {
             self.height + margins.top + margins.bottom
         };
 
-        self.ticks = self.build_ticks();
+        self.ticks = if self.kind.is_time() { self.build_time_ticks(c) } else { self.build_ticks() };
         self.generate_tick_labels();
         self.configure();
         self.calculate_label_rotation(c);
         let t = self.ticks_opts();
-        if t.bool_or("display", true) && t.bool_or("autoSkip", true) {
+        if t.bool_or("display", true) && (t.bool_or("autoSkip", true) || t.str("source") == Some("auto")) {
             self.ticks = self.auto_skip(c);
             self.label_sizes.replace(None);
         }
@@ -542,6 +563,7 @@ impl Scale {
                 ticks
             }
             ScaleKind::Linear => self.build_linear_ticks(),
+            ScaleKind::Time | ScaleKind::TimeSeries => unreachable!("time scales use build_time_ticks"),
             ScaleKind::Logarithmic => {
                 let mut ticks = generate_log_ticks(self.user.min, self.user.max, self.min, self.max);
                 if self.bounds_is_ticks() {
@@ -631,6 +653,13 @@ impl Scale {
 
     /// `generateTickLabels` with the default callbacks, then drop ticks with no label.
     fn generate_tick_labels(&mut self) {
+        if self.kind.is_time() {
+            let labels: Vec<String> = self.ticks.iter().map(|t| self.time_tick_label(t)).collect();
+            for (t, l) in self.ticks.iter_mut().zip(labels) {
+                t.label = Label::Text(l);
+            }
+            return;
+        }
         let values: Vec<f64> = self.ticks.iter().map(|t| t.value).collect();
         for (i, tick) in self.ticks.iter_mut().enumerate() {
             tick.label = match self.kind {
@@ -643,6 +672,7 @@ impl Scale {
                     }
                 }
                 ScaleKind::Linear => Label::Text(format::numeric_tick(tick.value, i, &values)),
+                ScaleKind::Time | ScaleKind::TimeSeries => unreachable!("handled above"),
                 ScaleKind::Logarithmic => {
                     // Ticks.formatters.logarithmic: label only "round" mantissas, plus the top 20%.
                     let v = tick.value;
@@ -676,6 +706,7 @@ impl Scale {
                 }
             }
             ScaleKind::Linear | ScaleKind::Logarithmic => format::format_default(value),
+            ScaleKind::Time | ScaleKind::TimeSeries => self.time_label_for_value(value),
         }
     }
 
@@ -714,6 +745,7 @@ impl Scale {
                 self.start_value = self.min.log10();
                 self.value_range = self.max.log10() - self.min.log10();
             }
+            ScaleKind::Time | ScaleKind::TimeSeries => {}
         }
     }
 
@@ -931,6 +963,9 @@ impl Scale {
     }
 
     pub fn pixel_for_value(&self, value: f64) -> f64 {
+        if self.kind.is_time() {
+            return self.time_pixel_for_value(value);
+        }
         if self.kind == ScaleKind::Logarithmic {
             // Zero (and values below the axis) plot at the minimum.
             let v = if value == 0.0 { self.min } else { value };
@@ -952,6 +987,7 @@ impl Scale {
             ScaleKind::Category => js_round(v),
             ScaleKind::Logarithmic => 10f64.powf(v),
             ScaleKind::Linear => v,
+            ScaleKind::Time | ScaleKind::TimeSeries => self.time_value_for_pixel(pixel),
         }
     }
 
@@ -973,7 +1009,9 @@ impl Scale {
     pub fn base_pixel(&self) -> f64 {
         match self.kind {
             ScaleKind::Category => self.bottom,
-            ScaleKind::Linear | ScaleKind::Logarithmic => self.pixel_for_value(self.base_value()),
+            ScaleKind::Linear | ScaleKind::Logarithmic | ScaleKind::Time | ScaleKind::TimeSeries => {
+                self.pixel_for_value(self.base_value())
+            }
         }
     }
 

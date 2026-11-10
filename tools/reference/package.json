@@ -5,6 +5,8 @@
   "type": "module",
   "dependencies": {
     "chart.js": "4.6.1",
+    "chartjs-adapter-date-fns": "3.0.0",
+    "date-fns": "4.4.0",
     "playwright-core": "1.65.0"
   }
 }

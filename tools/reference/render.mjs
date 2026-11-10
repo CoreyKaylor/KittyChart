@@ -40,10 +40,13 @@ function* walk(dir) {
 
 // Unhinted fonts give fractional glyph advances, as macOS/Windows/HiDPI browsers have. Linux
 // Chromium otherwise rounds every advance to whole pixels.
-const browser = await chromium.launch({ args: ['--font-render-hinting=none'] });
+// TZ=UTC: KittyChart's time scales compute in UTC, so the reference does too.
+const browser = await chromium.launch({ args: ['--font-render-hinting=none'], env: { ...process.env, TZ: 'UTC' } });
 const page = await browser.newPage();
 await page.setContent(`<!doctype html><style>${faces} body{margin:0}</style><body></body>`);
 await page.addScriptTag({ path: join(dirname(require.resolve('chart.js')), 'chart.umd.js') });
+// Time scales need a date adapter; KittyChart mirrors chartjs-adapter-date-fns.
+await page.addScriptTag({ path: join(dirname(require.resolve('chartjs-adapter-date-fns')), 'chartjs-adapter-date-fns.bundle.min.js') });
 await page.evaluate(async () => {
   for (const fam of ['Inter', 'Helvetica Neue', 'Helvetica', 'Arial']) {
     await document.fonts.load(`12px "${fam}"`);

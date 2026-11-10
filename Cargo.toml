@@ -35,6 +35,7 @@ thiserror = "2.0.21"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 csscolorparser = "0.9.0"
+jiff = { version = "0.2.41", default-features = false, features = ["std"] }
 vte = "0.15.0"
 
 # test-only

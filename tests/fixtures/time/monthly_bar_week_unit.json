@@ -1,0 +1,16 @@
+{
+  "_kc": { "width": 600, "height": 260 },
+  "type": "bar",
+  "data": {
+    "datasets": [{
+      "label": "Deploys",
+      "data": [
+        {"x": "2026-01-05", "y": 4}, {"x": "2026-01-12", "y": 7}, {"x": "2026-01-19", "y": 3},
+        {"x": "2026-01-26", "y": 9}, {"x": "2026-02-02", "y": 6}, {"x": "2026-02-09", "y": 11}
+      ]
+    }]
+  },
+  "options": {
+    "scales": { "x": { "type": "time", "time": { "unit": "week", "displayFormats": { "week": "'W/c' MMM d" } } } }
+  }
+}

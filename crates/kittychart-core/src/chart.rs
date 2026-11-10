@@ -352,6 +352,8 @@ impl Chart {
             let kind = match ty.as_str() {
                 "category" => ScaleKind::Category,
                 "logarithmic" => ScaleKind::Logarithmic,
+                "time" => ScaleKind::Time,
+                "timeseries" => ScaleKind::TimeSeries,
                 _ => ScaleKind::Linear,
             };
             let axis = if merged["axis"] == "y" { Axis::Y } else { Axis::X };
@@ -741,6 +743,24 @@ impl Chart {
     }
 
     fn determine_data_limits(&mut self) {
+        // Time scales need every data timestamp (`getDataTimestamps`) for ticks.source 'data'
+        // and the timeseries lookup table.
+        for s in 0..self.scales.len() {
+            if !self.scales[s].kind.is_time() {
+                continue;
+            }
+            let axis = self.scales[s].axis;
+            let mut ts: Vec<f64> = self
+                .sorted_metas(true)
+                .into_iter()
+                .filter(|&m| self.metas[m].x_scale == s || self.metas[m].y_scale == s)
+                .flat_map(|m| self.metas[m].parsed.iter().filter_map(move |p| p.get(axis)))
+                .filter(|v| v.is_finite())
+                .collect();
+            ts.sort_by(f64::total_cmp);
+            ts.dedup();
+            self.scales[s].data_timestamps = ts;
+        }
         for s in 0..self.scales.len() {
             let ranges: Vec<(f64, f64)> = self
                 .sorted_metas(true)

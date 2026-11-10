@@ -20,6 +20,7 @@ pub mod plugins;
 pub mod radial;
 pub mod scale;
 pub mod theme;
+pub mod time;
 
 pub use chart::Chart;
 pub use config::{ChartConfig, ChartType, ConfigError, Label};

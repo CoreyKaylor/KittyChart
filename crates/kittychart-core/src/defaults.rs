@@ -160,6 +160,16 @@ pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
             "category": {},
             "linear": {},
             "logarithmic": { "ticks": { "major": { "enabled": true } } },
+            "time": {
+                "bounds": "data",
+                "time": { "parser": false, "unit": false, "round": false, "isoWeekday": false, "minUnit": "millisecond", "displayFormats": {} },
+                "ticks": { "source": "auto", "major": { "enabled": false } }
+            },
+            "timeseries": {
+                "bounds": "data",
+                "time": { "parser": false, "unit": false, "round": false, "isoWeekday": false, "minUnit": "millisecond", "displayFormats": {} },
+                "ticks": { "source": "auto", "major": { "enabled": false } }
+            },
             "radialLinear": {
                 "display": true,
                 "animate": true,
