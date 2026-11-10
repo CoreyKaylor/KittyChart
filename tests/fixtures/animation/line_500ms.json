@@ -1,0 +1,10 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["a", "b", "c", "d", "e"],
+    "datasets": [
+      { "label": "One", "data": [12, 19, 7, 15, 10] }, { "label": "Two", "data": [8, 11, 14, 6, 13] }
+    ]
+  },
+  "_kc": { "width": 512, "height": 256, "time": 500 }
+}

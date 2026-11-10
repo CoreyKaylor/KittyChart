@@ -44,6 +44,14 @@ function* walk(dir) {
 const browser = await chromium.launch({ args: ['--font-render-hinting=none'], env: { ...process.env, TZ: 'UTC' } });
 const page = await browser.newPage();
 await page.setContent(`<!doctype html><style>${faces} body{margin:0}</style><body></body>`);
+// A controllable clock for animation fixtures, installed before Chart.js captures
+// requestAnimationFrame: Date.now() returns __kcTime when set, and frames run on demand.
+await page.addScriptTag({ content: `
+  window.__kcFrames = [];
+  window.requestAnimationFrame = (cb) => { window.__kcFrames.push(cb); return window.__kcFrames.length; };
+  const realNow = Date.now.bind(Date);
+  Date.now = () => (window.__kcTime ?? realNow());
+` });
 await page.addScriptTag({ path: join(dirname(require.resolve('chart.js')), 'chart.umd.js') });
 // Time scales need a date adapter; KittyChart mirrors chartjs-adapter-date-fns.
 await page.addScriptTag({ path: join(dirname(require.resolve('chartjs-adapter-date-fns')), 'chartjs-adapter-date-fns.bundle.min.js') });
@@ -67,7 +75,10 @@ for (const file of walk(fixturesDir)) {
     canvas.width = width;
     canvas.height = height;
     document.body.replaceChildren(canvas);
-    config.options = { ...config.options, animation: false, responsive: false, devicePixelRatio: dpr };
+    const animated = kc.time !== undefined;
+    config.options = { ...config.options, responsive: false, devicePixelRatio: dpr };
+    if (!animated) config.options.animation = false;
+    window.__kcTime = animated ? 1000000 : undefined;
     // KittyChart's declarative gradients ({type, x0…, stops}) become the scriptable options
     // Chart.js users write: (ctx) => ctx.chart.ctx.createLinearGradient(…).
     const coord = (v, a, dflt) => {
@@ -123,7 +134,33 @@ for (const file of walk(fixturesDir)) {
       if (kc.tooltip) chart.tooltip.setActiveElements(active, kc.tooltip.position ?? { x: 0, y: 0 });
       chart.update('none');
     }
+    if (animated) {
+      if (kc.next) {
+        // A data update: finish the intro, swap the data, update, then step into that transition.
+        window.__kcTime = 1000000 + 5000;
+        for (const f of window.__kcFrames.splice(0)) f(window.__kcTime);
+        // Mutate in place (the usual way to update a Chart.js chart): elements keep their
+        // identity and animate from where they are. Replacing chart.data wholesale would make
+        // fresh elements that grow from the base instead.
+        chart.data.labels = kc.next.labels;
+        kc.next.datasets.forEach((d, i) => Object.assign(chart.data.datasets[i], d));
+        chart.update();
+        window.__kcTime = 1000000 + 5000 + kc.time;
+        for (const f of window.__kcFrames.splice(0)) f(window.__kcTime);
+        const url = canvas.toDataURL('image/png');
+        chart.destroy();
+        window.__kcTime = undefined;
+        return url;
+      }
+      // Run the frame at kc.time ms into the intro animation. Every queued request runs:
+      // the animator keeps one outstanding request across charts and won't ask again.
+      window.__kcTime = 1000000 + kc.time;
+      const frames = window.__kcFrames;
+      window.__kcFrames = [];
+      for (const f of frames) f(window.__kcTime);
+    }
     const url = canvas.toDataURL('image/png');
+    window.__kcTime = undefined;
     chart.destroy();
     return url;
   }, { config, kc });

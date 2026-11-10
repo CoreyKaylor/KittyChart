@@ -1,0 +1,20 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["a", "b", "c", "d"],
+    "datasets": [
+      { "label": "Bars", "data": [12, 19, 7, 15] },
+      { "label": "Line", "type": "line", "data": [5, 9, 14, 8] }
+    ]
+  },
+  "_kc": {
+    "width": 512, "height": 256, "time": 400,
+    "next": {
+      "labels": ["a", "b", "c", "d"],
+      "datasets": [
+        { "label": "Bars", "data": [4, 22, 13, 9] },
+        { "label": "Line", "type": "line", "data": [15, 3, 8, 20] }
+      ]
+    }
+  }
+}

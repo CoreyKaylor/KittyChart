@@ -4,6 +4,32 @@ Every chart in `tests/fixtures/`, each a plain Chart.js configuration. Left: Cha
 
 Regenerate with `just gallery`.
 
+## animation
+
+### [animation-bar_300ms](../tests/fixtures/animation/bar_300ms.json)
+
+<img src="gallery/animation-bar_300ms-light.png" width="400"> <img src="gallery/animation-bar_300ms-dark.png" width="400">
+
+### [animation-doughnut_400ms](../tests/fixtures/animation/doughnut_400ms.json)
+
+<img src="gallery/animation-doughnut_400ms-light.png" width="400"> <img src="gallery/animation-doughnut_400ms-dark.png" width="400">
+
+### [animation-line_500ms](../tests/fixtures/animation/line_500ms.json)
+
+<img src="gallery/animation-line_500ms-light.png" width="400"> <img src="gallery/animation-line_500ms-dark.png" width="400">
+
+### [animation-polarArea_250ms](../tests/fixtures/animation/polarArea_250ms.json)
+
+<img src="gallery/animation-polarArea_250ms-light.png" width="400"> <img src="gallery/animation-polarArea_250ms-dark.png" width="400">
+
+### [animation-radar_600ms](../tests/fixtures/animation/radar_600ms.json)
+
+<img src="gallery/animation-radar_600ms-light.png" width="400"> <img src="gallery/animation-radar_600ms-dark.png" width="400">
+
+### [animation-update_bar_line_400ms](../tests/fixtures/animation/update_bar_line_400ms.json)
+
+<img src="gallery/animation-update_bar_line_400ms-light.png" width="400"> <img src="gallery/animation-update_bar_line_400ms-dark.png" width="400">
+
 ## arc
 
 ### [arc-doughnut_rings](../tests/fixtures/arc/doughnut_rings.json)

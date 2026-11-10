@@ -125,6 +125,19 @@ pub struct Chart {
     dataset_visibility: HashMap<usize, bool>,
     /// Data indices hidden at runtime (pie, doughnut and polar area legend clicks).
     hidden_data: std::collections::BTreeSet<usize>,
+    /// The terminal theme the chart was built with (kept for [`Chart::update`]).
+    theme: Option<crate::theme::Theme>,
+    /// Animation state (see [`Chart::set_time`]).
+    pub(crate) anim: AnimState,
+}
+
+/// Animation clock and transition state.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AnimState {
+    pub now: Option<f64>,
+    pub pending: Option<crate::animation::TransitionKind>,
+    pub transition: Option<crate::animation::Transition>,
+    pub displayed: Option<crate::animation::Snapshot>,
 }
 
 impl Chart {
@@ -214,6 +227,8 @@ impl Chart {
             tooltip: None,
             dataset_visibility: HashMap::new(),
             hidden_data: std::collections::BTreeSet::new(),
+            theme: theme.clone(),
+            anim: AnimState::default(),
         };
         chart.build_scales();
         chart.build_metas();
@@ -425,6 +440,9 @@ impl Chart {
     pub fn set_active(&mut self, mut elements: Vec<crate::interaction::ActiveElement>) {
         elements.sort();
         elements.dedup();
+        if elements != self.active {
+            self.request_transition(crate::animation::TransitionKind::Active);
+        }
         self.active = elements;
     }
 
@@ -458,6 +476,7 @@ impl Chart {
     pub fn set_dataset_visibility(&mut self, ds: usize, visible: bool) {
         self.dataset_visibility.insert(ds, visible);
         self.refresh();
+        self.request_transition(crate::animation::TransitionKind::Update);
     }
 
     /// `chart.toggleDataVisibility`: show or hide one data index of pie, doughnut and polar area
@@ -467,6 +486,7 @@ impl Chart {
             self.hidden_data.insert(index);
         }
         self.refresh();
+        self.request_transition(crate::animation::TransitionKind::Update);
     }
 
     /// The legend item under `(x, y)` (from the last draw).
@@ -486,6 +506,30 @@ impl Chart {
             }
         }
         true
+    }
+
+    /// Replace the configuration, keeping runtime state (no transition; see [`Chart::update`]).
+    pub(crate) fn replace_config(&mut self, config: ChartConfig) {
+        self.datasets = apply_colors_plugin(&config, self.theme.as_ref());
+        let mut font_fallback =
+            config.options.get("font").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+        merge_if(&mut font_fallback, &[&DEFAULTS["font"]]);
+        self.font_fallback = font_fallback;
+        self.config = config;
+        self.refresh();
+    }
+
+    pub(crate) fn chart_scopes_pub(&self) -> Scopes<'_> {
+        self.chart_scopes()
+    }
+
+    pub(crate) fn dataset_scopes_pub(&self, ds: usize, kind: ChartType) -> Scopes<'_> {
+        self.dataset_scopes(ds, kind)
+    }
+
+    /// The angle a pie/doughnut dataset starts at (its reset angle).
+    pub(crate) fn arc_start(&self, m: usize) -> f64 {
+        self.arc_rotation(m)
     }
 
     /// Rebuild everything derived from the data (after visibility changes): scales, metas,
@@ -2243,6 +2287,7 @@ impl Chart {
             r.update(&area, c);
         }
         self.update_datasets();
+        self.animate();
         self.update_fills();
         // Filler `beforeDraw`: bezier control points first, since fills interpolate along
         // other datasets' curves.

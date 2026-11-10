@@ -5,6 +5,8 @@
 //! immutable defaults. The same config always produces the same pixels.
 #![recursion_limit = "256"] // the `json!` defaults table in defaults.rs
 
+mod animate_impl;
+pub mod animation;
 pub mod arc;
 pub mod chart;
 pub mod color;

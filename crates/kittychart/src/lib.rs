@@ -52,6 +52,13 @@ pub struct RenderOptions {
     pub hidden: Vec<usize>,
     /// Pie, doughnut and polar area data indices hidden (as by legend clicks).
     pub hidden_data: Vec<usize>,
+    /// Render the intro animation's frame this many milliseconds in (one-shot renders
+    /// otherwise draw the final state).
+    pub time: Option<f64>,
+    /// With `time`: first finish the intro, then update to this `data` and render `time` ms
+    /// into that transition (for testing update animations).
+    #[doc(hidden)]
+    pub next_data: Option<serde_json::Value>,
 }
 
 impl RenderOptions {
@@ -67,6 +74,8 @@ impl RenderOptions {
             tooltip: None,
             hidden: Vec::new(),
             hidden_data: Vec::new(),
+            time: None,
+            next_data: None,
         }
     }
     pub fn height(mut self, h: f32) -> Self {
@@ -115,6 +124,8 @@ impl RenderOptions {
             let n = |k: &str| t["position"].get(k).and_then(Value::as_f64).unwrap_or(0.0);
             opts.tooltip = Some((n("x"), n("y")));
         }
+        opts.time = kc.get("time").and_then(Value::as_f64);
+        opts.next_data = kc.get("next").cloned();
         opts
     }
 }
@@ -162,6 +173,28 @@ fn chart_for(config: ChartConfig, opts: &RenderOptions) -> Chart {
     chart
 }
 
+/// With `opts.time`: run the chart's clock so the next draw is that frame of the intro (or,
+/// with `next_data`, of the update to it). Frames before it draw to a scratch canvas.
+fn play(chart: &mut Chart, opts: &RenderOptions, px_w: u32, px_h: u32) {
+    let Some(t) = opts.time else { return };
+    let scratch = || SkiaCanvas::with_pixel_size(px_w.max(1), px_h.max(1), opts.dpr);
+    // The intro starts at the first frame; render the one `t` ms later.
+    chart.set_time(0.0);
+    chart.draw(&mut scratch());
+    match &opts.next_data {
+        Some(next) => {
+            chart.set_time(5000.0);
+            chart.draw(&mut scratch());
+            let mut config = chart.config.clone();
+            config.data = next.clone();
+            chart.update(config);
+            chart.draw(&mut scratch());
+            chart.set_time(5000.0 + t);
+        }
+        None => chart.set_time(t),
+    }
+}
+
 /// Render a configuration.
 pub fn render(config: ChartConfig, opts: &RenderOptions) -> Image {
     let mut chart = chart_for(config, opts);
@@ -173,6 +206,7 @@ pub fn render(config: ChartConfig, opts: &RenderOptions) -> Image {
     if let Some(bg) = opts.background {
         canvas.fill_background(bg);
     }
+    play(&mut chart, opts, canvas.pixel_width(), canvas.pixel_height());
     chart.draw(&mut canvas);
     Image { width: canvas.pixel_width(), height: canvas.pixel_height(), rgba: canvas.to_rgba() }
 }
@@ -186,6 +220,8 @@ pub fn render_svg(config: ChartConfig, opts: &RenderOptions) -> String {
     if let Some(bg) = opts.background {
         canvas.fill_background(bg);
     }
+    let px = |v: f32| (v * opts.dpr).ceil() as u32;
+    play(&mut chart, opts, px(opts.width), px(height));
     chart.dpr = f64::from(opts.dpr);
     chart.set_active(opts.active.clone());
     if let Some(event) = opts.tooltip {
