@@ -60,11 +60,37 @@ jobs:
         with: { components: clippy }
       - uses: jdx/mise-action@v2
         with:
-          install_args: "zig aqua:nextest-rs/nextest/cargo-nextest"
+          install_args: "zig uv node aqua:nextest-rs/nextest/cargo-nextest"
       - uses: Swatinem/rust-cache@v2
         with: { key: libghostty }
       # libsixel's decoder checks the sixel encoder independently of our own decoder; tmux is
       # the multiplexer in the end-to-end tests.
       - run: sudo apt-get update && sudo apt-get install -y libsixel-bin tmux
-      - run: cargo clippy -p kittychart-conformance --all-targets -- -D warnings
+      - run: cargo clippy -p kittychart-conformance -p kittychart-python -p kittychart-node --all-targets -- -D warnings
+      # The end-to-end tests run the Python and Node packages (and a C program) on a PTY.
+      - run: cd bindings/python && uv sync --group dev
+      - run: cd bindings/node && npm ci --no-audit --no-fund && npm run build:debug
       - run: cargo nextest run --profile ci -p kittychart-conformance
+
+  # L5: the bindings' own suites. pytest (numpy, pandas, polars, Rich, Textual, IPython) and
+  # node:test + tsc against Chart.js's types. Pixels are compared with the Rust goldens.
+  bindings:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { key: bindings }
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: "uv node"
+      - name: Python
+        shell: bash
+        run: cd bindings/python && uv sync --group dev && uv run pytest -q
+      - name: Node
+        shell: bash
+        run: cd bindings/node && npm ci --no-audit --no-fund && npm run build:debug && npm test

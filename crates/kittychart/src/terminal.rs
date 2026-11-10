@@ -64,6 +64,9 @@ pub struct TermRender {
     pub scale: f32,
     /// Graphics escapes, followed by a newline that moves the cursor below the image.
     pub bytes: Vec<u8>,
+    /// `bytes[..graphics_len]` are the graphics escapes alone. With placeholders, the rest is
+    /// the placeholder text (for hosts that lay out text themselves, like Rich or Textual).
+    pub graphics_len: usize,
 }
 
 /// The default scale: Chart.js text is 12px with 1.2 line height, so a chart text line is about
@@ -89,6 +92,9 @@ pub fn render_for_terminal(config: ChartConfig, geom: TermGeometry, opts: &TermO
             cells(logical_w / aspect * scale, ch)
         }
     };
+    // Placeholder rows are numbered by diacritics, and the table has 297 of them.
+    let rows =
+        if opts.placeholders || opts.tmux { rows.min(kitty::MAX_PLACEHOLDER_ROWS as u16) } else { rows };
     // Exact device pixels: whole cells, no float round trip.
     let (px_w, px_h) = ((f32::from(cols) * cw).round() as u32, (f32::from(rows) * ch).round() as u32);
 
@@ -99,6 +105,7 @@ pub fn render_for_terminal(config: ChartConfig, geom: TermGeometry, opts: &TermO
     let image = render(config, &ropts);
 
     let mut bytes = Vec::with_capacity(image.rgba.len() / 4);
+    let mut graphics_len = usize::MAX;
     match opts.protocol {
         Protocol::Kitty => {
             let mut t = TransmitOptions::new(opts.image_id.unwrap_or(1));
@@ -108,6 +115,7 @@ pub fn render_for_terminal(config: ChartConfig, geom: TermGeometry, opts: &TermO
                 let mut esc = Vec::new();
                 kitty::transmit_virtual(image.as_term_image(), &t, &mut esc);
                 bytes = if opts.tmux { kitty::tmux_passthrough(&esc) } else { esc };
+                graphics_len = bytes.len();
                 let id = opts.image_id.unwrap_or(1);
                 bytes.extend_from_slice(
                     kitty::placeholder_text(id, u32::from(cols), u32::from(rows)).as_bytes(),
@@ -126,8 +134,9 @@ pub fn render_for_terminal(config: ChartConfig, geom: TermGeometry, opts: &TermO
             );
         }
     }
+    let graphics_len = graphics_len.min(bytes.len());
     bytes.push(b'\n');
-    TermRender { image, cols, rows, scale, bytes }
+    TermRender { image, cols, rows, scale, bytes, graphics_len }
 }
 
 /// A chart as text cells: the fallback for terminals without graphics.
@@ -213,6 +222,11 @@ mod tests {
         let cells = text.matches(kitty::PLACEHOLDER).count();
         assert_eq!(cells, usize::from(r.cols) * usize::from(r.rows));
         assert!(text.contains("\x1b[38;2;0;0;7m"));
+        let (graphics, rest) = r.bytes.split_at(r.graphics_len);
+        assert!(
+            graphics.ends_with(b"\x1b\\") && !String::from_utf8_lossy(graphics).contains(kitty::PLACEHOLDER)
+        );
+        assert_eq!(String::from_utf8_lossy(rest).matches(kitty::PLACEHOLDER).count(), cells);
     }
 
     #[test]

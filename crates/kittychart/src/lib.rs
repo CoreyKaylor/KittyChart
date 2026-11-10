@@ -9,10 +9,17 @@
 //! std::fs::write("chart.png", image.to_png()).unwrap();
 //! ```
 
+pub use kittychart_canvas::cells::{CellGrid, CellMode};
 pub use kittychart_canvas::{Color, FontContext};
+/// Parse any CSS color (`#36a2eb`, `rgb(…)`, `hsl(…)`, named colors, `transparent`).
+pub use kittychart_core::color::parse as parse_color;
 pub use kittychart_core::{Chart, ChartConfig, ChartType, ConfigError, Label, TerminalColors, Theme};
 
+pub mod show;
 pub mod terminal;
+
+/// The terminal layer (encoders, detection, `/dev/tty`), for hosts that need lower-level access.
+pub use kittychart_term as term;
 
 use kittychart_canvas::SkiaCanvas;
 

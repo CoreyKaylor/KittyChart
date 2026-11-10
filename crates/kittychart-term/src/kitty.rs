@@ -113,9 +113,13 @@ pub fn transmit_and_display(img: RgbaImage<'_>, opts: &TransmitOptions, out: &mu
 /// placeholder cells ([`placeholder_cell`]) whose foreground color encodes this image id. This
 /// is how images live inside text-based UIs (ratatui, Textual) and tmux: they move, scroll and
 /// clip with the text grid. `opts.columns`/`rows` set the placement's size in cells.
+///
+/// The placement id defaults to 1, so re-sending the image (an updated chart) replaces its
+/// virtual placement instead of adding another one.
 pub fn transmit_virtual(img: RgbaImage<'_>, opts: &TransmitOptions, out: &mut Vec<u8>) {
     let mut o = opts.clone();
     o.hold_cursor = false;
+    o.placement_id = o.placement_id.or(Some(1));
     let mut tmp = Vec::new();
     transmit_and_display(img, &o, &mut tmp);
     // Insert U=1 into the first chunk's control data: "\x1b_Ga=T," -> "\x1b_Ga=T,U=1,".
@@ -129,15 +133,28 @@ pub fn transmit_virtual(img: RgbaImage<'_>, opts: &TransmitOptions, out: &mut Ve
 /// The Unicode placeholder character.
 pub const PLACEHOLDER: char = '\u{10EEEE}';
 
+/// The most image rows (and directly addressable columns) placeholders can express: the
+/// spec's diacritic table has this many entries.
+pub const MAX_PLACEHOLDER_ROWS: u32 = crate::diacritics::DIACRITICS.len() as u32;
+
 /// One placeholder cell: U+10EEEE + row and column diacritics, and a third diacritic for the
 /// image id's most significant byte when it is non-zero. Its foreground color must encode the
 /// low 24 bits of the image id ([`placeholder_fg`]).
+///
+/// Columns past the diacritic table ([`MAX_PLACEHOLDER_ROWS`]) carry only the row diacritic:
+/// the terminal then takes the previous cell's column + 1 (and its id byte), so rows of any
+/// width work as long as they are drawn left to right without gaps. Rows can't be inferred;
+/// `row` must be below [`MAX_PLACEHOLDER_ROWS`].
 pub fn placeholder_cell(row: u32, col: u32, image_id: u32) -> String {
     use crate::diacritics::DIACRITICS;
+    debug_assert!(row < MAX_PLACEHOLDER_ROWS, "placeholder row {row} out of range");
     let d = |n: u32| char::from_u32(DIACRITICS[n as usize % DIACRITICS.len()]).expect("valid diacritic");
     let mut s = String::with_capacity(12);
     s.push(PLACEHOLDER);
     s.push(d(row));
+    if col >= MAX_PLACEHOLDER_ROWS {
+        return s;
+    }
     s.push(d(col));
     let msb = image_id >> 24;
     if msb != 0 {
@@ -247,6 +264,17 @@ impl std::fmt::Write for DisplayVec<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn columns_past_the_diacritic_table_are_inferred() {
+        let last = placeholder_cell(3, MAX_PLACEHOLDER_ROWS - 1, 7);
+        assert_eq!(last.chars().count(), 3, "row + column diacritics");
+        let past = placeholder_cell(3, MAX_PLACEHOLDER_ROWS, 7);
+        let mut c = past.chars();
+        assert_eq!(c.next(), Some(PLACEHOLDER));
+        assert_eq!(c.next().and_then(diacritic_index), Some(3), "row kept");
+        assert_eq!(c.next(), None, "column left to the terminal (previous + 1)");
+    }
 
     #[test]
     fn single_chunk_has_no_m_key() {

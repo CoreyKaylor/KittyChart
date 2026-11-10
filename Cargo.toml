@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "bindings/python", "bindings/node"]
 # kittychart-conformance and kittychart-preview need Zig (libghostty-vt). Keep them out of plain
 # `cargo build/test`. Run them with `just test-all`, `just preview`, or `-p <crate>`.
 default-members = [
@@ -11,6 +11,7 @@ default-members = [
     "crates/kittychart",
     "crates/kittychart-cli",
     "crates/kittychart-ratatui",
+    "crates/kittychart-ffi",
 ]
 
 [workspace.package]

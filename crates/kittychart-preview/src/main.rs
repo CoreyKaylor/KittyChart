@@ -54,6 +54,10 @@ struct Args {
     /// With --exec: also save everything the command wrote to this file.
     #[arg(long)]
     raw: Option<PathBuf>,
+    /// With --exec: save each kitty image the terminal holds at the end, as it stored it, to
+    /// DIR/<theme>-<image id>.png.
+    #[arg(long)]
+    dump_images: Option<PathBuf>,
     /// Comma-separated themes: built-in names or Ghostty theme files.
     #[arg(long, value_delimiter = ',', default_values_t = theme::BUILTIN.iter().map(|s| s.to_string()))]
     theme: Vec<String>,
@@ -122,6 +126,9 @@ fn main() {
             eprintln!("exec {:?}: exit {:?}, {} bytes", th.name, out.exit, out.output.len());
             if let Some(raw) = &args.raw {
                 std::fs::write(raw, &out.output).expect("write --raw");
+            }
+            if let Some(dir) = &args.dump_images {
+                dump_images(&t, dir, &th.name);
             }
             shots
                 .push((format!("{exec} · {}", th.name), paint(&t, th, args.cols, args.rows, cw, ch, &fonts)));
@@ -321,6 +328,7 @@ fn paint(
     while let Some(row) = row_iter.next() {
         let mut cells = cell_it_owner.update(row).expect("cell iter");
         let mut x = 0u32;
+        let mut prev: Option<(u32, u32)> = None;
         while let Some(cell) = cells.next() {
             let (px, py) = (pad + (x * cw) as f32, pad + (y * ch) as f32);
             if let Ok(Some(bg)) = cell.bg_color() {
@@ -328,14 +336,19 @@ fn paint(
                 c.fill_rect(px, py, cw as f32, ch as f32);
             }
             let g = cell.graphemes().unwrap_or_default();
+            if g.first() != Some(&kitty::PLACEHOLDER) {
+                prev = None;
+            }
             if g.first() == Some(&kitty::PLACEHOLDER) {
                 // A Unicode placeholder: draw this cell's tile of the image its color names.
                 let fg = cell.fg_color().ok().flatten().unwrap_or(colors.foreground);
                 let id = (u32::from(fg.r) << 16) | (u32::from(fg.g) << 8) | u32::from(fg.b);
-                let (row, col) = (
-                    g.get(1).and_then(|&d| kitty::diacritic_index(d)).unwrap_or(0),
-                    g.get(2).and_then(|&d| kitty::diacritic_index(d)).unwrap_or(0),
-                );
+                // Missing diacritics continue the previous placeholder cell (kitty spec).
+                let row =
+                    g.get(1).and_then(|&d| kitty::diacritic_index(d)).or(prev.map(|p| p.0)).unwrap_or(0);
+                let col =
+                    g.get(2).and_then(|&d| kitty::diacritic_index(d)).or(prev.map(|p| p.1 + 1)).unwrap_or(0);
+                prev = Some((row, col));
                 let gr = t.kitty_graphics().expect("graphics");
                 if let Some(img) = gr.image(id) {
                     let (iw, ih) = (img.width().expect("w"), img.height().expect("h"));
@@ -354,6 +367,7 @@ fn paint(
                     c.draw_rgba_device(px, py, cw as f32, ch as f32, &tile, cw, ch);
                 }
             } else if !g.is_empty() {
+                prev = None;
                 let style = cell.style().ok();
                 let fg = cell.fg_color().ok().flatten().unwrap_or(colors.foreground);
                 c.set_font(Font {
@@ -510,4 +524,26 @@ fn contact_sheet(
         );
     }
     (c.pixel_width(), c.pixel_height(), c.to_rgba())
+}
+
+/// Write every placed kitty image (RGBA) to `dir` as PNG.
+fn dump_images(t: &libghostty_vt::Terminal<'_, '_>, dir: &std::path::Path, prefix: &str) {
+    use libghostty_vt::kitty::graphics::PlacementIterator;
+    std::fs::create_dir_all(dir).expect("--dump-images dir");
+    let g = t.kitty_graphics().expect("graphics");
+    let mut iter = PlacementIterator::new().expect("placements");
+    let mut it = iter.update(&g).expect("placements");
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(p) = it.next() {
+        let id = p.image_id().expect("id");
+        if !seen.insert(id) {
+            continue;
+        }
+        let img = g.image(id).expect("image");
+        let (w, h) = (img.width().expect("w"), img.height().expect("h"));
+        let rgba = img.data().expect("data").to_vec();
+        let path = dir.join(format!("{prefix}-{id}.png"));
+        std::fs::write(&path, kittychart::Image { width: w, height: h, rgba }.to_png()).expect("write png");
+        eprintln!("image {id}: {w}x{h} -> {}", path.display());
+    }
 }

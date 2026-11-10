@@ -1,0 +1,23 @@
+[package]
+name = "kittychart-python"
+description = "Python bindings for KittyChart (the native part of the `kittychart` package)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+kittychart = { workspace = true }
+pyo3 = { version = "0.30.1", features = ["abi3-py39"] }
+
+[lints.rust]
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

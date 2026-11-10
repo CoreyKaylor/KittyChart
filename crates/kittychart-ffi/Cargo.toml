@@ -1,0 +1,26 @@
+[package]
+name = "kittychart-ffi"
+description = "C ABI for KittyChart: Chart.js-compatible charts for graphics-capable terminals"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+kittychart = { workspace = true }
+
+[dev-dependencies]
+cbindgen = "0.29.4"
+kittychart-testkit = { workspace = true }
+
+[lints.rust]
+# This crate is the C boundary: every exported function is `unsafe extern "C"`.
+unsafe_code = "allow"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

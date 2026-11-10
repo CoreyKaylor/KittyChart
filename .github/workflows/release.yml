@@ -1,0 +1,178 @@
+name: Release
+
+# Push a tag like v0.1.0 (with versions bumped in Cargo.toml, bindings/node/package.json) to
+# build every distributable and publish it:
+#   - GitHub release: the `kittychart` CLI and the C library (header, static + shared) per platform
+#   - PyPI: abi3 wheels (one per platform, Python ≥ 3.9) + sdist, via trusted publishing
+#   - npm: `kittychart` plus one prebuilt native package per platform, with provenance
+# Run it by hand (workflow_dispatch) to build everything without publishing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cli:
+    name: CLI + C library (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked -p kittychart-cli -p kittychart-ffi
+      - name: Package
+        shell: bash
+        run: |
+          name="kittychart-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "$name/lib" "$name/include"
+          cp crates/kittychart-ffi/include/kittychart.h "$name/include/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$name/"
+          cd target/release
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp kittychart.exe "../../$name/"
+            cp kittychart_ffi.dll kittychart_ffi.dll.lib kittychart_ffi.lib "../../$name/lib/"
+            cd ../.. && 7z a "$name.zip" "$name"
+          else
+            cp kittychart "../../$name/"
+            cp libkittychart_ffi.a "../../$name/lib/"
+            cp libkittychart_ffi.so "../../$name/lib/" 2>/dev/null || cp libkittychart_ffi.dylib "../../$name/lib/"
+            cd ../.. && tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: kittychart-*.*
+
+  wheels:
+    name: Python wheel (${{ matrix.platform }} ${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, platform: manylinux, target: x86_64 }
+          - { os: ubuntu-24.04-arm, platform: manylinux, target: aarch64 }
+          - { os: ubuntu-24.04, platform: musllinux, target: x86_64 }
+          - { os: ubuntu-24.04-arm, platform: musllinux, target: aarch64 }
+          - { os: macos-15-intel, platform: macos, target: x86_64 }
+          - { os: macos-latest, platform: macos, target: aarch64 }
+          - { os: windows-latest, platform: windows, target: x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.platform == 'manylinux' && 'auto' || matrix.platform == 'musllinux' && 'musllinux_1_2' || '' }}
+          args: --release --locked --out dist
+      # Smoke-test the wheel itself (not the source tree): install it into a clean venv.
+      - name: Test the wheel
+        if: matrix.platform != 'musllinux'
+        shell: bash
+        run: |
+          python -m venv /tmp/wheel-venv || python -m venv wheel-venv
+          venv=$( [ -d /tmp/wheel-venv ] && echo /tmp/wheel-venv || echo wheel-venv )
+          py="$venv/bin/python"; [ -x "$py" ] || py="$venv/Scripts/python.exe"
+          "$py" -m pip install --no-index --find-links bindings/python/dist kittychart
+          "$py" -c "import kittychart; c = kittychart.Chart(type='bar', data={'labels': ['a'], 'datasets': [{'data': [1]}]}); assert c.to_png()[:4] == b'\x89PNG'; print(c.to_text(30))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform }}-${{ matrix.target }}
+          path: bindings/python/dist/*.whl
+
+  sdist:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: bindings/python/dist/*.tar.gz
+
+  node:
+    name: Node module (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: bindings/node
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci --no-audit --no-fund
+      - run: npx napi build --platform --release --target ${{ matrix.target }} --js binding.js --dts binding.d.ts
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.target }}
+          path: |
+            bindings/node/*.node
+            bindings/node/binding.js
+            bindings/node/binding.d.ts
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [cli, wheels, sdist, node]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write # GitHub release
+      id-token: write # PyPI trusted publishing, npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes artifacts/cli-*/*
+      - name: Collect Python distributions
+        run: mkdir -p pydist && cp artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz pydist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with: { packages-dir: pydist }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, registry-url: "https://registry.npmjs.org" }
+      - name: npm
+        working-directory: bindings/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm ci --no-audit --no-fund
+          cp ../../artifacts/node-x86_64-unknown-linux-gnu/binding.js ../../artifacts/node-x86_64-unknown-linux-gnu/binding.d.ts .
+          mkdir -p modules && cp ../../artifacts/node-*/*.node modules/
+          npx napi create-npm-dirs
+          npx napi artifacts --output-dir modules
+          npx napi pre-publish -t npm --skip-optional-publish
+          for dir in npm/*/; do (cd "$dir" && npm publish --provenance --access public); done
+          npm publish --provenance --access public

@@ -3,102 +3,13 @@
 //! (raw mode, timeouts), detection against a terminal that actually answers, protocol choice,
 //! cursor placement, and tmux passthrough.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
 use std::time::Duration;
 
-use kittychart_conformance::pty::{self, Key, Outcome};
-use kittychart_conformance::{Colors, answering_terminal, screen_text};
-use libghostty_vt::Terminal;
-use libghostty_vt::kitty::graphics::PlacementIterator;
-
-const COLS: u16 = 100;
-const ROWS: u16 = 32;
-const CW: u32 = 10;
-const CH: u32 = 20;
-
-fn root() -> PathBuf {
-    kittychart_testkit::workspace_root()
-}
-
-/// Build a workspace binary (once per process; cargo serializes concurrent builds itself) and
-/// return its path.
-fn built(cargo_args: &[&str], rel: &str) -> String {
-    static BUILD: Mutex<()> = Mutex::new(());
-    let _guard = BUILD.lock().unwrap();
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "--quiet"])
-        .args(cargo_args)
-        .current_dir(root())
-        .status()
-        .expect("cargo build");
-    assert!(status.success(), "building {cargo_args:?} failed");
-    // CARGO_TARGET_TMPDIR is <target>/tmp.
-    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).parent().unwrap().to_path_buf();
-    target.join("debug").join(rel).to_string_lossy().into_owned()
-}
-
-fn cli() -> String {
-    built(&["-p", "kittychart-cli"], "kittychart")
-}
-
-fn fixture(name: &str) -> String {
-    root().join("tests/fixtures").join(name).to_string_lossy().into_owned()
-}
-
-struct Run {
-    term: Terminal<'static, 'static>,
-    out: Outcome,
-}
-
-fn run(argv: &[String], graphics: bool, keys: &[Key], snapshot_ms: Option<u64>) -> Run {
-    let (mut term, replies) = answering_terminal(COLS, ROWS, CW, CH, &Colors::default());
-    if !graphics {
-        term.set_kitty_image_storage_limit(0).unwrap();
-    }
-    let out = pty::run(
-        &mut term,
-        &replies,
-        argv,
-        &[],
-        (COLS, ROWS, CW, CH),
-        keys,
-        snapshot_ms.map(Duration::from_millis),
-        Duration::from_secs(60),
-    );
-    Run { term, out }
-}
-
-#[derive(Debug)]
-struct Placed {
-    image_id: u32,
-    virtual_: bool,
-    at: Option<(i32, i32)>,
-    grid: (u32, u32),
-}
-
-fn placements(t: &Terminal<'_, '_>) -> Vec<Placed> {
-    let g = t.kitty_graphics().unwrap();
-    let mut iter = PlacementIterator::new().unwrap();
-    let mut it = iter.update(&g).unwrap();
-    let mut out = Vec::new();
-    while let Some(p) = it.next() {
-        let img = g.image(p.image_id().unwrap()).unwrap();
-        let grid = p.grid_size(&img, t).unwrap();
-        out.push(Placed {
-            image_id: p.image_id().unwrap(),
-            virtual_: p.is_virtual().unwrap(),
-            at: p.viewport_pos(&img, t).ok().flatten().map(|v| (v.col, v.row)),
-            grid: (grid.cols, grid.rows),
-        });
-    }
-    out
-}
-
-fn placeholder_cells(t: &Terminal<'_, '_>) -> usize {
-    screen_text(t).chars().filter(|&c| c == kittychart_term::kitty::PLACEHOLDER).count()
-}
+use common::*;
 
 #[test]
 fn cli_draws_kitty_graphics_and_leaves_the_cursor_below() {
@@ -176,4 +87,52 @@ fn ratatui_dashboard_draws_both_charts_and_cleans_up() {
     assert_eq!(r.out.exit, Some(0));
     let g = r.term.kitty_graphics().unwrap();
     assert!(g.image(1).is_none() && g.image(2).is_none(), "images deleted on exit");
+}
+
+#[test]
+fn c_api_show_draws_kitty_graphics() {
+    let r = run(&[c_example(), fixture("line/basic.json")], true, &[], None);
+    assert_eq!(r.out.exit, Some(0), "{}", String::from_utf8_lossy(&r.out.output));
+    let p = placements(&r.term);
+    assert_eq!(p.len(), 1, "{p:?}");
+    assert!(!p[0].virtual_);
+    assert_eq!(p[0].grid.0, 60, "kc_show_options.cols");
+    assert_eq!(u32::from(r.term.cursor_y().unwrap()), p[0].grid.1, "cursor below the image");
+}
+
+#[test]
+fn c_api_show_falls_back_to_text() {
+    let r = run(&[c_example()], false, &[], None);
+    assert_eq!(r.out.exit, Some(0));
+    assert!(placements(&r.term).is_empty());
+    assert!(screen_text(&r.term).contains("Requests"));
+}
+
+/// Wider than the 297 placeholder diacritics: columns past them are inferred by the terminal
+/// (found on a real 540-column Ghostty window, where the chart repeated itself).
+#[test]
+fn tmux_placeholders_wider_than_the_diacritic_table() {
+    let tmux = Command::new("tmux").arg("-V").output();
+    assert!(tmux.is_ok_and(|o| o.status.success()), "tmux not found: install tmux to run this test");
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("e2e-tmux-wide");
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join("tmux.conf");
+    std::fs::write(
+        &conf,
+        "set -g allow-passthrough on\nset -g default-terminal tmux-256color\n\
+         set -as terminal-features ',*:RGB'\nset -g status off\n",
+    )
+    .unwrap();
+    let socket = format!("kc-e2e-wide-{}", std::process::id());
+    let cmd = format!("{} {} --rows 20; sleep 5", cli(), fixture("line/basic.json"));
+    let argv: Vec<String> = ["tmux", "-L", &socket, "-f", conf.to_str().unwrap(), "new-session", &cmd]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let r = run_geometry(&argv, 400, 32, true, &[], Some(3000));
+    let _ = Command::new("tmux").args(["-L", &socket, "kill-server"]).status();
+    let p = placements(&r.term);
+    assert_eq!(p.len(), 1, "{p:?}");
+    assert_eq!(p[0].grid, (400, 20));
+    assert_whole_images(&r.term, &p);
 }

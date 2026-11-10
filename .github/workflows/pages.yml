@@ -1,0 +1,48 @@
+name: Docs
+
+# Publishes docs/ (index, C guide, gallery) to GitHub Pages. Enable Pages with "GitHub Actions"
+# as the source in the repository settings.
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "bindings/*/README.md", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site
+        run: |
+          mkdir -p site/bindings/python site/bindings/node
+          cp -r docs/. site/
+          cp bindings/python/README.md site/bindings/python/README.md
+          cp bindings/node/README.md site/bindings/node/README.md
+          # Links into the source tree point at the repository.
+          sed -i "s#](\.\./\(crates\|tests\)/#](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/\1/#g" site/*.md
+          sed -i 's#](\.\./bindings/#](bindings/#g' site/*.md
+      - uses: actions/configure-pages@v5
+      - uses: actions/jekyll-build-pages@v1
+        with: { source: site, destination: _site }
+      - uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

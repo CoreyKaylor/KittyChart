@@ -1,0 +1,43 @@
+"""Type stubs for the native extension (see src/lib.rs). Configs are passed as JSON text."""
+
+from typing import Optional, TypedDict
+
+__version__: str
+
+class _Colors(TypedDict):
+    background: list[int]
+    foreground: list[int]
+    palette: Optional[list[list[int]]]
+
+class _TerminalInfo(TypedDict):
+    cols: int
+    rows: int
+    cell_width: float
+    cell_height: float
+    kitty: bool
+    sixel: bool
+    tmux: bool
+    colors: Optional[_Colors]
+
+class Prepared:
+    mode: str
+    data: bytes
+    target: str
+    cols: int
+    rows: int
+    graphics_len: int
+    image_id: Optional[int]
+
+def validate(json: str) -> None: ...
+def render_png(json: str, width: float = 800.0, height: Optional[float] = None, scale: float = 1.0, background: Optional[str] = None) -> bytes: ...
+def render_rgba(json: str, width: float = 800.0, height: Optional[float] = None, scale: float = 1.0, background: Optional[str] = None) -> tuple[int, int, bytes]: ...
+def render_text(json: str, cols: int, rows: Optional[int] = None, mode: str = "text", colors: Optional[dict] = None) -> str: ...
+def probe(timeout_ms: int = 250) -> _TerminalInfo: ...
+def window_size() -> tuple[int, int, Optional[int], Optional[int]]: ...
+def prepare(json: str, opts: dict) -> Prepared: ...
+def prepare_for(json: str, info: dict, opts: dict) -> Prepared: ...
+def write_tty(data: bytes) -> None: ...
+def delete_image(image_id: int, tmux: bool = False) -> bytes: ...
+def placeholder_rows(image_id: int, cols: int, rows: int) -> list[str]: ...
+def placeholder_color(image_id: int) -> tuple[int, int, int]: ...
+def next_image_id() -> int: ...

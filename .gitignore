@@ -2,3 +2,11 @@
 *.new.png
 *.pending-snap
 node_modules/
+# Bindings: virtualenvs, build outputs and napi-generated loaders (`just python-dev`, `just node-dev`)
+.venv/
+__pycache__/
+*.so
+*.node
+/bindings/node/binding.js
+/bindings/node/binding.d.ts
+/bindings/python/dist/

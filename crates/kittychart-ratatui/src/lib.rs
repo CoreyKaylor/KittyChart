@@ -133,6 +133,9 @@ impl StatefulWidget for ChartWidget<'_> {
         }
         match self.graphics {
             Graphics::Kitty { cell_width, cell_height } => {
+                // Placeholder rows are numbered by diacritics (297 of them); taller areas keep
+                // their extra rows empty.
+                let area = Rect { height: area.height.min(kitty::MAX_PLACEHOLDER_ROWS as u16), ..area };
                 let key = self.key(area);
                 if state.sent != Some(key) {
                     let geom = TermGeometry { cols: area.width, cell_width, cell_height };

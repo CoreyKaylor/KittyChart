@@ -1,0 +1,46 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "kittychart"
+description = "Chart.js-compatible charts for graphics-capable terminals (kitty, Ghostty, WezTerm, foot …)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+dynamic = ["version"]
+keywords = ["chart", "terminal", "kitty", "sixel", "chart.js", "rich", "textual"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+[project.optional-dependencies]
+rich = ["rich>=13"]
+textual = ["textual>=0.80"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "kittychart._native"
+manifest-path = "Cargo.toml"
+features = ["pyo3/extension-module"]
+# Keep build outputs out of the sdist.
+exclude = ["bindings/python/dist/**", "bindings/python/.venv/**"]
+
+[dependency-groups]
+dev = ["pytest>=8", "numpy", "pandas", "polars", "rich>=13", "textual>=0.80", "ipython>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# Rebuild the extension when any Rust source in the workspace changes.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "src/**/*.rs" },
+    { file = "../../Cargo.lock" },
+    { file = "../../crates/**/*.rs" },
+]

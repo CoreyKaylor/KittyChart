@@ -8,8 +8,8 @@ default:
 test *args:
     cargo nextest run {{args}}
 
-# Everything, including the libghostty-vt conformance suite (L3). Needs Zig (mise install).
-test-all *args:
+# Everything: + Ghostty conformance and bindings end to end (L3). Needs Zig, uv, Node (mise install).
+test-all *args: python-dev node-dev
     cargo nextest run --workspace {{args}}
 
 # Only the Ghostty conformance suite.
@@ -40,8 +40,35 @@ lint:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
 
+# Build the Python package into bindings/python/.venv (with the dev tools: pytest, numpy, …).
+python-dev:
+    cd bindings/python && uv sync --group dev
+
+# Build the Node native module (debug) into bindings/node.
+node-dev:
+    cd bindings/node && npm ci --no-audit --no-fund && npm run build:debug
+
+# L5: the bindings' own test suites (pytest; node:test + tsc).
+test-bindings: python-dev node-dev
+    cd bindings/python && .venv/bin/pytest -q
+    cd bindings/node && npm test
+
+# Regenerate the C header (crates/kittychart-ffi/include/kittychart.h) from the Rust source.
+header:
+    KC_BLESS=1 cargo test -q -p kittychart-ffi --test header
+
+# Regenerate the docs gallery (docs/gallery/*.png, docs/gallery.md) from tests/fixtures.
+gallery:
+    cargo run --quiet --release -p kittychart --example gallery
+
+# Release builds of every distributable, locally: CLI + C library, Python wheel, Node module.
+dist:
+    cargo build --release -p kittychart-cli -p kittychart-ffi
+    cd bindings/python && uvx maturin build --release --out dist
+    cd bindings/node && npm ci --no-audit --no-fund && npm run build
+
 fmt:
     cargo fmt
 
 # What CI's required lanes run, locally.
-ci: lint test-all
+ci: lint test-all test-bindings

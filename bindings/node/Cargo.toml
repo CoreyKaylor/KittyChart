@@ -1,0 +1,26 @@
+[package]
+name = "kittychart-node"
+description = "Node.js bindings for KittyChart (the native part of the `kittychart` npm package)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+kittychart = { workspace = true }
+napi = { version = "3.16.1", default-features = false, features = ["napi6"] }
+napi-derive = "3.7.0"
+
+[build-dependencies]
+napi-build = "2.6.0"
+
+[lints.rust]
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

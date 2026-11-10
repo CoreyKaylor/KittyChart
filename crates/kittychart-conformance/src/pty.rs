@@ -65,9 +65,11 @@ pub fn run(
             pixel_height: (u32::from(rows) * ch) as u16,
         })
         .expect("openpty");
-    // A relative program path is relative to the current directory, as in a shell.
+    // A relative program path is relative to the current directory, as in a shell. Made
+    // absolute without resolving symlinks: a virtualenv's `bin/python` is a symlink, and
+    // Python finds its venv from the unresolved path.
     let program = if argv[0].contains('/') {
-        std::fs::canonicalize(&argv[0]).unwrap_or_else(|e| panic!("{}: {e}", argv[0]))
+        std::path::absolute(&argv[0]).unwrap_or_else(|e| panic!("{}: {e}", argv[0]))
     } else {
         argv[0].clone().into()
     };
