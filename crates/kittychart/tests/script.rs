@@ -142,3 +142,30 @@ fn segment_styles_from_a_function() {
     let line = chart.metas[0].line.as_ref().unwrap();
     assert_eq!(line.styled.as_ref().map(Vec::len), Some(3), "split into three styled segments");
 }
+
+#[test]
+fn tooltip_callbacks() {
+    use kittychart_core::interaction::ActiveElement;
+    let config = bar(
+        json!({ "plugins": { "tooltip": { "callbacks": {
+            "label": script::marker("label"), "footer": script::marker("footer") } } } }),
+        json!({}),
+    )
+    .with_fn("label", |ctx| {
+        let item = &ctx["__args"][0];
+        Ok(json!(format!(
+            "{} sold {}",
+            item["label"].as_str().unwrap(),
+            item["formattedValue"].as_str().unwrap()
+        )))
+    })
+    .with_fn("footer", |ctx| Ok(json!(format!("{} item(s)", ctx["__args"][0].as_array().unwrap().len()))));
+    let mut chart = Chart::for_cells(config, None);
+    let el = ActiveElement { dataset: 0, index: 1 };
+    chart.set_active(vec![el]);
+    chart.set_tooltip(vec![el], None);
+    let mut cells = kittychart::canvas::cells::CellCanvas::new(80, 24, kittychart::CellMode::Auto);
+    chart.draw(&mut cells);
+    let text = cells.into_grid().to_plain();
+    assert!(text.contains("b sold 15") && text.contains("1 item(s)"), "{text}");
+}

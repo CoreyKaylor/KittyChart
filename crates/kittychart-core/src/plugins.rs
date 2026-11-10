@@ -153,6 +153,8 @@ pub struct LegendItem {
     pub hidden: bool,
     pub border_radius: Option<Corners>,
     pub dataset_index: usize,
+    /// For pie, doughnut and polar area legends: the data index the item stands for.
+    pub index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,9 +212,25 @@ pub struct Legend {
     line_widths: Vec<f64>,
     column_sizes: Vec<(f64, f64)>,
     hit_boxes: Vec<HitBox>,
+    /// Each item's hit box as last drawn: `[left, top, width, height]` (Chart.js `legendHitBoxes`
+    /// after `adjustHitBoxes`).
+    drawn: std::cell::RefCell<Vec<[f64; 4]>>,
 }
 
 impl Legend {
+    /// Each item's hit box from the last draw: `[left, top, width, height]`.
+    pub fn item_boxes(&self) -> Vec<[f64; 4]> {
+        self.drawn.borrow().clone()
+    }
+
+    /// The item at `(x, y)`, from the last draw (`legend.handleEvent`'s `_getLegendItemAt`).
+    pub fn item_at(&self, x: f64, y: f64) -> Option<usize> {
+        if !self.display {
+            return None;
+        }
+        self.drawn.borrow().iter().position(|&[l, t, w, h]| x >= l && x <= l + w && y >= t && y <= t + h)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         display: bool,
@@ -244,6 +262,7 @@ impl Legend {
             line_widths: vec![],
             column_sizes: vec![],
             hit_boxes: vec![],
+            drawn: Default::default(),
         }
     }
 
@@ -402,6 +421,7 @@ impl Legend {
             )
         };
         let text_color = self.labels.color.unwrap_or(Color::rgba(0.4, 0.4, 0.4, 1.0));
+        self.drawn.borrow_mut().clear();
         for (i, item) in self.items.iter().enumerate() {
             c.set_font(font.to_canvas());
             let text_width =
@@ -433,6 +453,7 @@ impl Legend {
             }
 
             self.draw_box(c, x, y, item, box_width, box_height, half);
+            self.drawn.borrow_mut().push([x, y, width, item_height]);
 
             let text_x = text_x(
                 self.labels.text_align,

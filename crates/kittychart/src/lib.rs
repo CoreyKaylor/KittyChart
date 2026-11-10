@@ -43,11 +43,31 @@ pub struct RenderOptions {
     /// Replace Chart.js's default colors with a theme (for example one derived from the
     /// terminal). Explicit colors in the config still win.
     pub theme: Option<Theme>,
+    /// Elements drawn in their hover state (Chart.js `setActiveElements`).
+    pub active: Vec<kittychart_core::interaction::ActiveElement>,
+    /// Show a tooltip for `active` (a pinned tooltip), with this pointer position for the
+    /// `nearest` positioner.
+    pub tooltip: Option<(f64, f64)>,
+    /// Datasets hidden (as by legend clicks).
+    pub hidden: Vec<usize>,
+    /// Pie, doughnut and polar area data indices hidden (as by legend clicks).
+    pub hidden_data: Vec<usize>,
 }
 
 impl RenderOptions {
     pub fn new(width: f32) -> Self {
-        Self { width, height: None, dpr: 1.0, background: None, pixel_size: None, theme: None }
+        Self {
+            width,
+            height: None,
+            dpr: 1.0,
+            background: None,
+            pixel_size: None,
+            theme: None,
+            active: Vec::new(),
+            tooltip: None,
+            hidden: Vec::new(),
+            hidden_data: Vec::new(),
+        }
     }
     pub fn height(mut self, h: f32) -> Self {
         self.height = Some(h);
@@ -60,6 +80,42 @@ impl RenderOptions {
     pub fn background(mut self, c: Color) -> Self {
         self.background = Some(c);
         self
+    }
+
+    /// Options from a test fixture's `"_kc"` object: `width` (512), `height`, `dpr` (1),
+    /// `background` (white), `active` (`[[dataset, index], …]`), `tooltip`
+    /// (`{"position": {"x", "y"}}`), `hidden` and `hiddenData`. Used by the golden, parity,
+    /// SVG and gallery tools, so they all render a fixture the same way.
+    #[doc(hidden)]
+    pub fn from_fixture(kc: &serde_json::Value) -> RenderOptions {
+        use serde_json::Value;
+        let num = |k: &str, d: f64| kc.get(k).and_then(Value::as_f64).unwrap_or(d) as f32;
+        let mut opts = RenderOptions::new(num("width", 512.0)).dpr(num("dpr", 1.0));
+        opts.height = kc.get("height").and_then(Value::as_f64).map(|h| h as f32);
+        opts.background = parse_color(kc.get("background").and_then(Value::as_str).unwrap_or("#ffffff"));
+        let list = |k: &str| -> Vec<usize> {
+            kc.get(k)
+                .and_then(Value::as_array)
+                .map_or(vec![], |a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect())
+        };
+        opts.hidden = list("hidden");
+        opts.hidden_data = list("hiddenData");
+        if let Some(active) = kc.get("active").and_then(Value::as_array) {
+            opts.active = active
+                .iter()
+                .filter_map(|a| {
+                    Some(kittychart_core::interaction::ActiveElement {
+                        dataset: a.get(0)?.as_u64()? as usize,
+                        index: a.get(1)?.as_u64()? as usize,
+                    })
+                })
+                .collect();
+        }
+        if let Some(t) = kc.get("tooltip") {
+            let n = |k: &str| t["position"].get(k).and_then(Value::as_f64).unwrap_or(0.0);
+            opts.tooltip = Some((n("x"), n("y")));
+        }
+        opts
     }
 }
 
@@ -89,9 +145,26 @@ impl Image {
     }
 }
 
+/// A chart set up for `opts`: theme, visibility, hover and tooltip state.
+fn chart_for(config: ChartConfig, opts: &RenderOptions) -> Chart {
+    let mut chart = Chart::with_theme(config, opts.theme.clone());
+    for &d in &opts.hidden {
+        chart.set_dataset_visibility(d, false);
+    }
+    for &i in &opts.hidden_data {
+        chart.toggle_data_visibility(i);
+    }
+    chart.set_active(opts.active.clone());
+    if let Some(event) = opts.tooltip {
+        chart.set_tooltip(opts.active.clone(), Some(event));
+    }
+    chart.dpr = f64::from(opts.dpr);
+    chart
+}
+
 /// Render a configuration.
 pub fn render(config: ChartConfig, opts: &RenderOptions) -> Image {
-    let mut chart = Chart::with_theme(config, opts.theme.clone());
+    let mut chart = chart_for(config, opts);
     let height = opts.height.unwrap_or_else(|| (f64::from(opts.width) / chart.aspect_ratio()) as f32);
     let mut canvas = match opts.pixel_size {
         Some((w, h)) => SkiaCanvas::with_pixel_size(w, h, opts.dpr),
@@ -100,7 +173,6 @@ pub fn render(config: ChartConfig, opts: &RenderOptions) -> Image {
     if let Some(bg) = opts.background {
         canvas.fill_background(bg);
     }
-    chart.dpr = f64::from(opts.dpr);
     chart.draw(&mut canvas);
     Image { width: canvas.pixel_width(), height: canvas.pixel_height(), rgba: canvas.to_rgba() }
 }
@@ -108,13 +180,17 @@ pub fn render(config: ChartConfig, opts: &RenderOptions) -> Image {
 /// Render as an SVG document, the same chart as [`render`] (`pixel_size` is ignored). Text is
 /// drawn as glyph outlines, so the SVG needs no fonts.
 pub fn render_svg(config: ChartConfig, opts: &RenderOptions) -> String {
-    let mut chart = Chart::with_theme(config, opts.theme.clone());
+    let mut chart = chart_for(config, opts);
     let height = opts.height.unwrap_or_else(|| (f64::from(opts.width) / chart.aspect_ratio()) as f32);
     let mut canvas = kittychart_canvas::SvgCanvas::new(opts.width, height, opts.dpr);
     if let Some(bg) = opts.background {
         canvas.fill_background(bg);
     }
     chart.dpr = f64::from(opts.dpr);
+    chart.set_active(opts.active.clone());
+    if let Some(event) = opts.tooltip {
+        chart.set_tooltip(opts.active.clone(), Some(event));
+    }
     chart.draw(&mut canvas);
     canvas.finish()
 }

@@ -232,6 +232,9 @@ impl<'a> Scopes<'a> {
     pub fn bool_or(&self, key: &str, default: bool) -> bool {
         self.get(key).and_then(Value::as_bool).unwrap_or(default)
     }
+    pub fn str_at(&self, key: &str, i: Option<usize>) -> Option<&str> {
+        self.get_at(key, i).and_then(Value::as_str)
+    }
     pub fn str(&self, key: &str) -> Option<&str> {
         self.get(key).and_then(Value::as_str)
     }

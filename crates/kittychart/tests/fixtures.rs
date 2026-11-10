@@ -11,16 +11,7 @@ use kittychart_testkit::golden::{Image, assert_golden};
 
 fn fixture(path: &Path, contents: String) -> datatest_stable::Result<()> {
     let v: serde_json::Value = serde_json::from_str(&contents)?;
-    let kc = &v["_kc"];
-    let num = |k: &str, d: f64| kc.get(k).and_then(serde_json::Value::as_f64).unwrap_or(d) as f32;
-    let mut opts = RenderOptions::new(num("width", 512.0)).dpr(num("dpr", 1.0));
-    if let Some(h) = kc.get("height").and_then(serde_json::Value::as_f64) {
-        opts = opts.height(h as f32);
-    }
-    let bg = kc.get("background").and_then(serde_json::Value::as_str).unwrap_or("#ffffff");
-    if let Some(c) = kittychart_core::color::parse(bg) {
-        opts = opts.background(c);
-    }
+    let opts = RenderOptions::from_fixture(&v["_kc"]);
     let img = render_json(&contents, &opts)?;
     let root = kittychart_testkit::workspace_root().join("tests/fixtures");
     let rel = path.canonicalize()?.strip_prefix(&root)?.with_extension("");

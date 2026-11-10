@@ -1,0 +1,11 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["a", "b", "c", "d", "e"],
+    "datasets": [
+      { "label": "Points", "data": [3, 7, 4, 8, 5], "pointRadius": 4, "pointHoverRadius": 9,
+        "pointBackgroundColor": "rgba(255, 99, 132, 0.5)" }
+    ]
+  },
+  "_kc": { "width": 512, "height": 256, "active": [[0, 1], [0, 3]] }
+}

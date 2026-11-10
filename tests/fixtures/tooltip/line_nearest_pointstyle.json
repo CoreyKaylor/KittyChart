@@ -1,0 +1,11 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+    "datasets": [{ "label": "Latency (ms)", "data": [120, 190, 170, 250, 210], "pointStyle": "rectRot", "pointRadius": 5 }]
+  },
+  "options": {
+    "plugins": { "tooltip": { "position": "nearest", "usePointStyle": true, "cornerRadius": 0, "padding": 10 } }
+  },
+  "_kc": { "width": 512, "height": 256, "active": [[0, 3]], "tooltip": { "position": { "x": 360, "y": 60 } } }
+}

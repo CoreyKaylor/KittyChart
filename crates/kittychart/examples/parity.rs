@@ -18,14 +18,7 @@ fn main() {
         let rel = file.strip_prefix(&fixtures).unwrap().with_extension("png");
         let json = std::fs::read_to_string(&file).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let kc = &v["_kc"];
-        let num = |k: &str, d: f64| kc.get(k).and_then(serde_json::Value::as_f64).unwrap_or(d) as f32;
-        let mut opts = RenderOptions::new(num("width", 512.0)).dpr(num("dpr", 1.0));
-        if let Some(h) = kc.get("height").and_then(serde_json::Value::as_f64) {
-            opts = opts.height(h as f32);
-        }
-        let bg = kc.get("background").and_then(serde_json::Value::as_str).unwrap_or("#ffffff");
-        opts = opts.background(kittychart_core::color::parse(bg).unwrap());
+        let opts = RenderOptions::from_fixture(&v["_kc"]);
         let ours = match render_json(&json, &opts) {
             Ok(i) => i,
             Err(e) => {

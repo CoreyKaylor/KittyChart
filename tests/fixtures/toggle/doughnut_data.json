@@ -1,0 +1,5 @@
+{
+  "type": "doughnut",
+  "data": { "labels": ["Web", "iOS", "Android", "Other"], "datasets": [{ "data": [55, 30, 15, 8] }] },
+  "_kc": { "width": 400, "height": 300, "hiddenData": [0] }
+}

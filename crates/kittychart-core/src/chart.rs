@@ -44,7 +44,7 @@ pub struct FloatBar {
 }
 
 impl Parsed {
-    fn get(&self, axis: Axis) -> Option<f64> {
+    pub(crate) fn get(&self, axis: Axis) -> Option<f64> {
         match axis {
             Axis::X => self.x,
             Axis::Y => self.y,
@@ -78,10 +78,10 @@ pub struct DatasetMeta {
 }
 
 impl DatasetMeta {
-    fn i_scale(&self) -> usize {
+    pub(crate) fn i_scale(&self) -> usize {
         if self.index_axis == Axis::X { self.x_scale } else { self.y_scale }
     }
-    fn v_scale(&self) -> usize {
+    pub(crate) fn v_scale(&self) -> usize {
         if self.index_axis == Axis::X { self.y_scale } else { self.x_scale }
     }
 }
@@ -93,7 +93,7 @@ type StackKey = (String, u64);
 pub struct Chart {
     pub config: ChartConfig,
     /// Datasets after the `colors` plugin ran.
-    datasets: Vec<Value>,
+    pub(crate) datasets: Vec<Value>,
     pub scales: Vec<Scale>,
     /// The `radialLinear` scale of radar and polar area charts.
     pub radial: Option<RadialScale>,
@@ -106,12 +106,25 @@ pub struct Chart {
     pub width: f64,
     pub height: f64,
     pub dpr: f64,
-    font_fallback: Value,
+    pub(crate) font_fallback: Value,
     /// Terminal-derived defaults (see [`crate::theme`]). `{}` when rendering as plain Chart.js.
     theme_layer: Value,
     theme_scale: Value,
     /// Drawing onto terminal cells.
     cells: bool,
+    /// `_minPadding` from the last layout (how far elements may overflow the chart area).
+    pub min_padding: f64,
+    /// Active (hovered) elements: drawn with their `hover*` options, on top.
+    active: Vec<crate::interaction::ActiveElement>,
+    /// Elements the tooltip shows, and the pointer position (for the `nearest` positioner).
+    tooltip_active: Vec<crate::interaction::ActiveElement>,
+    tooltip_event: Option<(f64, f64)>,
+    /// The tooltip as last drawn.
+    pub tooltip: Option<crate::tooltip::Tooltip>,
+    /// Visibility set at runtime (legend clicks), overriding `dataset.hidden`.
+    dataset_visibility: HashMap<usize, bool>,
+    /// Data indices hidden at runtime (pie, doughnut and polar area legend clicks).
+    hidden_data: std::collections::BTreeSet<usize>,
 }
 
 impl Chart {
@@ -194,6 +207,13 @@ impl Chart {
             theme_layer,
             theme_scale,
             cells,
+            min_padding: 0.0,
+            active: Vec::new(),
+            tooltip_active: Vec::new(),
+            tooltip_event: None,
+            tooltip: None,
+            dataset_visibility: HashMap::new(),
+            hidden_data: std::collections::BTreeSet::new(),
         };
         chart.build_scales();
         chart.build_metas();
@@ -270,7 +290,11 @@ impl Chart {
                 o
             },
         );
-        json!({ "type": "data", "dataIndex": i, "index": i, "raw": raw, "parsed": parsed })
+        let active = self.is_active(ds, i);
+        json!({
+            "type": "data", "dataIndex": i, "index": i, "raw": raw, "parsed": parsed,
+            "active": active, "mode": if active { "active" } else { "default" },
+        })
     }
 
     /// The data context for element `i` of dataset `ds`.
@@ -283,7 +307,7 @@ impl Chart {
     }
 
     /// A color option that may also be a gradient (see [`crate::gradient`]).
-    fn paint_at(&self, s: &Scopes<'_>, key: &str, idx: Option<usize>) -> Option<Paint> {
+    pub(crate) fn paint_at(&self, s: &Scopes<'_>, key: &str, idx: Option<usize>) -> Option<Paint> {
         crate::gradient::paint(s.get_at(key, idx)?, &self.chart_area)
     }
 
@@ -300,7 +324,7 @@ impl Chart {
         .with_script(self.script_ctx(|| self.chart_context(), None))
     }
 
-    fn plugin_scopes(&self, id: &str) -> Scopes<'_> {
+    pub(crate) fn plugin_scopes(&self, id: &str) -> Scopes<'_> {
         let t = self.chart_type().as_str();
         Scopes::new([
             &self.config.options["plugins"][id],
@@ -330,7 +354,7 @@ impl Chart {
     }
 
     /// `datasetElementScopeKeys(T, el)` with element prefixes.
-    fn element_scopes(&self, ds: usize, kind: ChartType, el: &str) -> Scopes<'_> {
+    pub(crate) fn element_scopes(&self, ds: usize, kind: ChartType, el: &str) -> Scopes<'_> {
         let t = kind.as_str();
         let o = &self.config.options;
         let ov = overrides_for(t);
@@ -357,6 +381,126 @@ impl Chart {
             || self.dataset_context(ds),
             Some(Box::new(move |i| self.data_context_fields(ds, i))),
         ))
+    }
+
+    /// Element scopes for data element `i`: with the `hover` prefixes when it's active
+    /// (`_resolveElementOptions(type, 'active')`).
+    fn element_scopes_for(&self, ds: usize, kind: ChartType, el: &str, i: usize) -> Scopes<'_> {
+        let s = self.element_scopes(ds, kind, el);
+        if self.is_active(ds, i) { s.with_prefixes(&[&format!("{el}Hover"), "hover", el, ""]) } else { s }
+    }
+
+    /// An element color. Active elements use `hover*Color` when set, else Chart.js's default
+    /// `getHoverColor` of the normal color (gradients stay as they are).
+    fn element_paint(
+        &self,
+        s: &Scopes<'_>,
+        ds: usize,
+        kind: ChartType,
+        el: &str,
+        i: usize,
+        key: &str,
+    ) -> Option<Paint> {
+        if !self.is_active(ds, i) {
+            return self.paint_at(s, key, Some(i));
+        }
+        let hover = self.element_scopes(ds, kind, el).with_prefixes(&[&format!("{el}Hover"), "hover"]);
+        if let Some(p) = self.paint_at(&hover, key, Some(i)) {
+            return Some(p);
+        }
+        let base = self.paint_at(&self.element_scopes(ds, kind, el), key, Some(i))?;
+        Some(match base {
+            Paint::Solid(c) => Paint::Solid(crate::color::hover_color(c)),
+            other => other,
+        })
+    }
+
+    /// Whether element `i` of dataset `ds` is active (hovered).
+    pub fn is_active(&self, ds: usize, i: usize) -> bool {
+        self.active.binary_search(&crate::interaction::ActiveElement { dataset: ds, index: i }).is_ok()
+    }
+
+    /// Set the active (hovered) elements. They are drawn with their hover styles on the next
+    /// draw, on top of the others.
+    pub fn set_active(&mut self, mut elements: Vec<crate::interaction::ActiveElement>) {
+        elements.sort();
+        elements.dedup();
+        self.active = elements;
+    }
+
+    /// The active elements.
+    pub fn active(&self) -> &[crate::interaction::ActiveElement] {
+        &self.active
+    }
+
+    /// Show a tooltip for `elements` on the next draw (Chart.js `tooltip.setActiveElements`).
+    /// `event` is the pointer position, used by the `nearest` positioner.
+    pub fn set_tooltip(
+        &mut self,
+        elements: Vec<crate::interaction::ActiveElement>,
+        event: Option<(f64, f64)>,
+    ) {
+        self.tooltip_active = elements;
+        self.tooltip_event = event;
+    }
+
+    /// `chart.getDataVisibility(index)`.
+    pub fn data_visible(&self, index: usize) -> bool {
+        !self.hidden_data.contains(&index)
+    }
+
+    /// `chart.isDatasetVisible(index)`.
+    pub fn dataset_visible(&self, ds: usize) -> bool {
+        self.metas.iter().find(|m| m.index == ds).is_some_and(|m| m.visible)
+    }
+
+    /// `chart.setDatasetVisibility`: show or hide a dataset (as a legend click does).
+    pub fn set_dataset_visibility(&mut self, ds: usize, visible: bool) {
+        self.dataset_visibility.insert(ds, visible);
+        self.refresh();
+    }
+
+    /// `chart.toggleDataVisibility`: show or hide one data index of pie, doughnut and polar area
+    /// charts.
+    pub fn toggle_data_visibility(&mut self, index: usize) {
+        if !self.hidden_data.remove(&index) {
+            self.hidden_data.insert(index);
+        }
+        self.refresh();
+    }
+
+    /// The legend item under `(x, y)` (from the last draw).
+    pub fn legend_item_at(&self, x: f64, y: f64) -> Option<&LegendItem> {
+        self.legend.item_at(x, y).and_then(|i| self.legend.items.get(i))
+    }
+
+    /// The legend's default click: toggle the dataset (or, for pie, doughnut and polar area
+    /// charts, the data index) under `(x, y)`. Returns whether something changed.
+    pub fn legend_click(&mut self, x: f64, y: f64) -> bool {
+        let Some(item) = self.legend_item_at(x, y).cloned() else { return false };
+        match item.index {
+            Some(i) => self.toggle_data_visibility(i),
+            None => {
+                let visible = self.dataset_visible(item.dataset_index);
+                self.set_dataset_visibility(item.dataset_index, !visible);
+            }
+        }
+        true
+    }
+
+    /// Rebuild everything derived from the data (after visibility changes): scales, metas,
+    /// stacks, limits and plugins. Runtime state (hover, tooltip, visibility) is kept.
+    fn refresh(&mut self) {
+        self.scales.clear();
+        self.radial = None;
+        self.metas.clear();
+        self.stacks.clear();
+        self.build_scales();
+        self.build_metas();
+        self.parse_all();
+        self.update_stacks();
+        self.determine_data_limits();
+        self.build_plugins();
     }
 
     fn index_axis_for(&self, kind: ChartType, ds: Option<usize>) -> Axis {
@@ -533,7 +677,11 @@ impl Chart {
                 index: i,
                 kind,
                 order: ds.get("order").and_then(as_num).unwrap_or(0.0),
-                visible: ds.get("hidden").and_then(Value::as_bool) != Some(true),
+                visible: self
+                    .dataset_visibility
+                    .get(&i)
+                    .copied()
+                    .unwrap_or(ds.get("hidden").and_then(Value::as_bool) != Some(true)),
                 label: ds.get("label").map(Label::from_value).unwrap_or(Label::Text(String::new())),
                 index_axis,
                 x_scale,
@@ -731,7 +879,7 @@ impl Chart {
     }
 
     /// Visible metas sorted by `order` then index (`getSortedVisibleDatasetMetas`).
-    fn sorted_metas(&self, visible_only: bool) -> Vec<usize> {
+    pub(crate) fn sorted_metas(&self, visible_only: bool) -> Vec<usize> {
         let mut v: Vec<usize> =
             (0..self.metas.len()).filter(|&m| !visible_only || self.metas[m].visible).collect();
         v.sort_by(|&a, &b| {
@@ -894,7 +1042,14 @@ impl Chart {
                 .into_iter()
                 .filter(|&m| self.metas[m].kind.is_radial())
                 .map(|m| {
-                    let vals = self.metas[m].parsed.iter().filter_map(|p| p.y);
+                    // PolarAreaController.getMinMax skips hidden data; radar's doesn't.
+                    let polar = self.metas[m].kind == ChartType::PolarArea;
+                    let vals = self.metas[m]
+                        .parsed
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| !polar || self.data_visible(*i))
+                        .filter_map(|(_, p)| p.y);
                     vals.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)))
                 })
                 .collect();
@@ -1024,6 +1179,7 @@ impl Chart {
                     Corners::from_value(label_border_radius.as_ref().or(s.get_at("borderRadius", idx)))
                 }),
                 dataset_index: ds,
+                index: None,
             });
         }
         if self.chart_type().is_arc() || self.chart_type() == ChartType::PolarArea {
@@ -1060,9 +1216,10 @@ impl Chart {
                     line_dash_offset: s.num_or("borderDashOffset", 0.0),
                     point_style: point_style.unwrap_or_default(),
                     rotation: 0.0,
-                    hidden: false,
+                    hidden: !self.data_visible(i),
                     border_radius: None,
                     dataset_index: meta.index,
+                    index: Some(i),
                 }
             })
             .collect()
@@ -1070,7 +1227,7 @@ impl Chart {
 
     fn arc_options(&self, m: usize, i: usize) -> ArcOptions {
         let meta = &self.metas[m];
-        let s = self.element_scopes(meta.index, meta.kind, "arc");
+        let s = self.element_scopes_for(meta.index, meta.kind, "arc", i);
         let ds = self.dataset_scopes(meta.index, meta.kind);
         let idx = Some(i);
         let radius = match s.get_at("borderRadius", idx) {
@@ -1089,8 +1246,8 @@ impl Chart {
             }
         };
         ArcOptions {
-            background_color: self.paint_at(&s, "backgroundColor", idx),
-            border_color: self.paint_at(&s, "borderColor", idx),
+            background_color: self.element_paint(&s, meta.index, meta.kind, "arc", i, "backgroundColor"),
+            border_color: self.element_paint(&s, meta.index, meta.kind, "arc", i, "borderColor"),
             border_width: s.num_at("borderWidth", idx).unwrap_or(2.0),
             border_align_inner: s.str("borderAlign") == Some("inner"),
             border_join: s
@@ -1116,7 +1273,7 @@ impl Chart {
 
     fn point_options(&self, m: usize, i: usize) -> PointOptions {
         let meta = &self.metas[m];
-        let s = self.element_scopes(meta.index, meta.kind, "point");
+        let s = self.element_scopes_for(meta.index, meta.kind, "point", i);
         let idx = Some(i);
         // Bubble: the datum's `r` replaces the radius option.
         let bubble_r =
@@ -1128,8 +1285,8 @@ impl Chart {
             point_style: PointStyle::from_value(s.get_at("pointStyle", idx)),
             rotation: s.num_at("rotation", idx).unwrap_or(0.0),
             border_width: s.num_at("borderWidth", idx).unwrap_or(1.0),
-            background_color: self.paint_at(&s, "backgroundColor", idx),
-            border_color: self.paint_at(&s, "borderColor", idx),
+            background_color: self.element_paint(&s, meta.index, meta.kind, "point", i, "backgroundColor"),
+            border_color: self.element_paint(&s, meta.index, meta.kind, "point", i, "borderColor"),
         }
     }
 
@@ -1167,12 +1324,12 @@ impl Chart {
 
     fn bar_options(&self, m: usize, i: usize) -> BarOptions {
         let meta = &self.metas[m];
-        let s = self.element_scopes(meta.index, meta.kind, "bar");
+        let s = self.element_scopes_for(meta.index, meta.kind, "bar", i);
         let idx = Some(i);
         let radius = s.get_at("borderRadius", idx);
         BarOptions {
-            background_color: self.paint_at(&s, "backgroundColor", idx),
-            border_color: self.paint_at(&s, "borderColor", idx),
+            background_color: self.element_paint(&s, meta.index, meta.kind, "bar", i, "backgroundColor"),
+            border_color: self.element_paint(&s, meta.index, meta.kind, "bar", i, "borderColor"),
             border_width: Padding::from_value(s.get_at("borderWidth", idx)),
             border_radius: Corners::from_value(radius),
             border_radius_is_object: radius.is_some_and(Value::is_object),
@@ -1604,7 +1761,13 @@ impl Chart {
         let Some(r) = self.radial.clone() else { return };
         let meta = self.metas[m].clone();
         let ds = self.dataset_scopes(meta.index, meta.kind);
-        let visible = meta.parsed.iter().filter(|p| p.y.is_some()).count().max(1);
+        let visible = meta
+            .parsed
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| p.y.is_some() && self.data_visible(*i))
+            .count()
+            .max(1);
         let default_angle = 360.0 / visible as f64;
         let mut angle = r.start_angle();
         let mut arcs = Vec::with_capacity(meta.parsed.len());
@@ -1613,7 +1776,7 @@ impl Chart {
             let s = self.element_scopes(meta.index, meta.kind, "arc");
             let a = s.num_at("angle", Some(i)).filter(|a| *a != 0.0).unwrap_or(default_angle);
             let start = angle;
-            let end = angle + crate::math::to_radians(a);
+            let end = if self.data_visible(i) { angle + crate::math::to_radians(a) } else { angle };
             angle = end;
             if options.spacing == 0.0 {
                 options.spacing = ds.num_or("spacing", 0.0);
@@ -1632,7 +1795,11 @@ impl Chart {
                 end_angle: end,
                 circumference: end - start,
                 inner_radius: 0.0,
-                outer_radius: p.y.map_or(0.0, |v| r.distance_for_value(v)),
+                outer_radius: if self.data_visible(i) {
+                    p.y.map_or(0.0, |v| r.distance_for_value(v))
+                } else {
+                    0.0
+                },
                 options,
             });
         }
@@ -1671,15 +1838,28 @@ impl Chart {
 
         // getMaxBorderWidth(): from the first visible dataset's arcs.
         let first_visible = (0..self.metas.len()).find(|&k| self.metas[k].visible);
+        // Both use the default-mode options, so the layout doesn't move when an arc becomes
+        // active. Chart.js reads `hoverOffset`/`hoverBorderWidth` here too, but they aren't
+        // arc element option names, so they resolve to undefined: hover never reserves space.
         let max_border = first_visible.map_or(0.0, |k| {
-            (0..self.metas[k].parsed.len())
+            let meta = &self.metas[k];
+            (0..meta.parsed.len())
                 .map(|i| {
-                    let o = self.arc_options(k, i);
-                    if o.border_align_inner { 0.0 } else { o.border_width }
+                    let s = self.element_scopes(meta.index, meta.kind, "arc");
+                    if s.str_at("borderAlign", Some(i)) == Some("inner") {
+                        0.0
+                    } else {
+                        s.num_at("borderWidth", Some(i)).unwrap_or(0.0)
+                    }
                 })
                 .fold(0.0, f64::max)
         });
-        let max_offset = (0..n).map(|i| self.arc_options(m, i).offset).fold(0.0, f64::max);
+        let max_offset = (0..n)
+            .map(|i| {
+                let s = self.element_scopes(meta.index, meta.kind, "arc");
+                s.num_at("offset", Some(i)).unwrap_or(0.0)
+            })
+            .fold(0.0, f64::max);
         let spacing = max_border + max_offset + ds.num_or("spacing", 0.0);
         let max_size = ((area.width().min(area.height()) - spacing) / 2.0).max(0.0);
         let cutout = match ds.get("cutout") {
@@ -1717,7 +1897,14 @@ impl Chart {
         let inner_radius = (outer_radius - radius_length * weight).max(0.0);
 
         // calculateTotal / calculateCircumference
-        let total: f64 = meta.parsed.iter().filter_map(|p| p.y).map(f64::abs).sum();
+        let total: f64 = meta
+            .parsed
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.data_visible(*i))
+            .filter_map(|(_, p)| p.y)
+            .map(f64::abs)
+            .sum();
         let circumference = self.arc_circumference(m);
         let arc_len = |v: Option<f64>| match v {
             Some(v) if total > 0.0 && meta.visible => {
@@ -1729,7 +1916,7 @@ impl Chart {
         let mut start = self.arc_rotation(m);
         let mut arcs = Vec::with_capacity(n);
         for (i, p) in meta.parsed.iter().enumerate() {
-            let len = arc_len(p.y);
+            let len = if self.data_visible(i) { arc_len(p.y) } else { 0.0 };
             arcs.push(Arc {
                 x: cx + ox,
                 y: cy + oy,
@@ -2026,6 +2213,7 @@ impl Chart {
         }
         let auto_padding = self.chart_scopes().child("layout").bool_or("autoPadding", true);
         let min_padding = if auto_padding { self.max_overflow() } else { 0.0 };
+        self.min_padding = min_padding;
         let padding = Padding::from_value(self.chart_scopes().child("layout").get("padding"));
 
         // Layout. Order of boxes = plugin start order (legend, subtitle, title), then scales.
@@ -2078,6 +2266,13 @@ impl Chart {
         for &m in order.iter().rev() {
             self.draw_dataset(c, m);
         }
+        // Tooltip plugin `afterDraw`: over everything.
+        let active = std::mem::take(&mut self.tooltip_active);
+        self.tooltip = self.layout_tooltip(c, &active, self.tooltip_event);
+        self.tooltip_active = active;
+        if let Some(t) = &self.tooltip {
+            t.draw(c);
+        }
     }
 
     fn draw_dataset(&mut self, c: &mut dyn Canvas, m: usize) {
@@ -2100,20 +2295,31 @@ impl Chart {
                 if let Some(line) = &meta.line {
                     line.draw(c, &meta.points);
                 }
-                for p in &meta.points {
-                    p.draw(c, &area);
+                // drawActiveElementsOnTop: active elements after the rest.
+                for active in [false, true] {
+                    for (i, p) in meta.points.iter().enumerate() {
+                        if self.is_active(meta.index, i) == active {
+                            p.draw(c, &area);
+                        }
+                    }
                 }
             }
             ChartType::Pie | ChartType::Doughnut | ChartType::PolarArea => {
-                for a in &meta.arcs {
-                    a.draw(c);
+                for active in [false, true] {
+                    for (i, a) in meta.arcs.iter().enumerate() {
+                        if self.is_active(meta.index, i) == active {
+                            a.draw(c);
+                        }
+                    }
                 }
             }
             ChartType::Bar => {
                 let vax = if meta.index_axis == Axis::X { Axis::Y } else { Axis::X };
-                for (b, p) in meta.bars.iter().zip(&meta.parsed) {
-                    if p.get(vax).is_some() {
-                        b.draw(c);
+                for active in [false, true] {
+                    for (i, (b, p)) in meta.bars.iter().zip(&meta.parsed).enumerate() {
+                        if p.get(vax).is_some() && self.is_active(meta.index, i) == active {
+                            b.draw(c);
+                        }
                     }
                 }
             }

@@ -1,0 +1,12 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["Q1", "Q2", "Q3"],
+    "datasets": [
+      { "label": "Revenue", "data": [12, 19, 7] },
+      { "label": "Costs", "data": [8, 11, 14] },
+      { "label": "Profit", "data": [4, 8, -7] }
+    ]
+  },
+  "_kc": { "width": 512, "height": 256, "hidden": [1] }
+}

@@ -1,0 +1,10 @@
+{
+  "type": "scatter",
+  "data": {
+    "datasets": [
+      { "label": "Top right", "data": [{ "x": 0, "y": 0 }, { "x": 10, "y": 10 }, { "x": 5, "y": 5 }] },
+      { "label": "Bubble-ish", "data": [{ "x": 9.5, "y": 0.5 }] }
+    ]
+  },
+  "_kc": { "width": 512, "height": 256, "active": [[0, 1]], "tooltip": { "position": { "x": 0, "y": 0 } } }
+}

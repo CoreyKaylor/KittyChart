@@ -1,0 +1,13 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["January", "February", "March", "April"],
+    "datasets": [
+      { "label": "Revenue", "data": [12, 19, 7, 15] },
+      { "label": "Costs", "data": [8, 11, 14, 9] },
+      { "label": "Floating", "data": [[2, 6], [3, 9], [1, 4], [5, 12]] }
+    ]
+  },
+  "options": { "interaction": { "mode": "index" } },
+  "_kc": { "width": 512, "height": 256, "active": [[0, 1], [1, 1], [2, 1]], "tooltip": { "position": { "x": 200, "y": 120 } } }
+}

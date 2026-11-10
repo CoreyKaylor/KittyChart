@@ -52,9 +52,19 @@ fn main() {
         let json = std::fs::read_to_string(&file).unwrap();
         let config = ChartConfig::from_json(&json).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
 
-        let mut light = RenderOptions::new(WIDTH).dpr(DPR);
+        // The fixture's state (hover, tooltip, hidden data) at the gallery's size.
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mut light = RenderOptions::from_fixture(&v["_kc"]);
+        light.width = WIDTH;
+        light.dpr = DPR;
+        light.height = None;
+        // Hover and tooltip positions are in fixture pixels; keep them at the fixture's width.
+        if light.tooltip.is_some() || !light.active.is_empty() {
+            light.width = v["_kc"]["width"].as_f64().unwrap_or(512.0) as f32;
+            light.height = v["_kc"]["height"].as_f64().map(|h| h as f32);
+        }
         light.background = kittychart::parse_color("#ffffff");
-        let mut night = RenderOptions::new(WIDTH).dpr(DPR);
+        let mut night = light.clone();
         night.background = kittychart::parse_color("#1a1b26");
         night.theme = Some(Theme::from_terminal(&dark));
         for (suffix, opts) in [("light", &light), ("dark", &night)] {

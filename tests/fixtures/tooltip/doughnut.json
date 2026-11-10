@@ -1,0 +1,5 @@
+{
+  "type": "doughnut",
+  "data": { "labels": ["Web", "iOS", "Android"], "datasets": [{ "label": "Users", "data": [55123.456, 30, 15] }] },
+  "_kc": { "width": 400, "height": 300, "active": [[0, 0]], "tooltip": { "position": { "x": 0, "y": 0 } } }
+}

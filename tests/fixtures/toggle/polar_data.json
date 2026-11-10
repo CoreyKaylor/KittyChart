@@ -1,0 +1,5 @@
+{
+  "type": "polarArea",
+  "data": { "labels": ["a", "b", "c", "d"], "datasets": [{ "data": [11, 16, 7, 3] }] },
+  "_kc": { "width": 400, "height": 300, "hiddenData": [1] }
+}

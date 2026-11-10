@@ -1,0 +1,8 @@
+{
+  "type": "doughnut",
+  "data": {
+    "labels": ["Web", "iOS", "Android"],
+    "datasets": [{ "data": [55, 30, 15], "hoverOffset": 16, "hoverBorderWidth": 3 }]
+  },
+  "_kc": { "width": 400, "height": 300, "active": [[0, 0]] }
+}

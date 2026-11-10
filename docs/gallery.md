@@ -84,6 +84,20 @@ Regenerate with `just gallery`.
 
 <img src="gallery/gradient-bar_radial_doughnut_conic-light.png" width="400"> <img src="gallery/gradient-bar_radial_doughnut_conic-dark.png" width="400">
 
+## hover
+
+### [hover-bar](../tests/fixtures/hover/bar.json)
+
+<img src="gallery/hover-bar-light.png" width="400"> <img src="gallery/hover-bar-dark.png" width="400">
+
+### [hover-doughnut](../tests/fixtures/hover/doughnut.json)
+
+<img src="gallery/hover-doughnut-light.png" width="400"> <img src="gallery/hover-doughnut-dark.png" width="400">
+
+### [hover-line_doughnut](../tests/fixtures/hover/line_doughnut.json)
+
+<img src="gallery/hover-line_doughnut-light.png" width="400"> <img src="gallery/hover-line_doughnut-dark.png" width="400">
+
 ## line
 
 ### [line-basic](../tests/fixtures/line/basic.json)
@@ -153,3 +167,39 @@ Regenerate with `just gallery`.
 ### [time-timeseries_gaps](../tests/fixtures/time/timeseries_gaps.json)
 
 <img src="gallery/time-timeseries_gaps-light.png" width="400"> <img src="gallery/time-timeseries_gaps-dark.png" width="400">
+
+## toggle
+
+### [toggle-bar_hidden](../tests/fixtures/toggle/bar_hidden.json)
+
+<img src="gallery/toggle-bar_hidden-light.png" width="400"> <img src="gallery/toggle-bar_hidden-dark.png" width="400">
+
+### [toggle-doughnut_data](../tests/fixtures/toggle/doughnut_data.json)
+
+<img src="gallery/toggle-doughnut_data-light.png" width="400"> <img src="gallery/toggle-doughnut_data-dark.png" width="400">
+
+### [toggle-polar_data](../tests/fixtures/toggle/polar_data.json)
+
+<img src="gallery/toggle-polar_data-light.png" width="400"> <img src="gallery/toggle-polar_data-dark.png" width="400">
+
+## tooltip
+
+### [tooltip-bar_index](../tests/fixtures/tooltip/bar_index.json)
+
+<img src="gallery/tooltip-bar_index-light.png" width="400"> <img src="gallery/tooltip-bar_index-dark.png" width="400">
+
+### [tooltip-doughnut](../tests/fixtures/tooltip/doughnut.json)
+
+<img src="gallery/tooltip-doughnut-light.png" width="400"> <img src="gallery/tooltip-doughnut-dark.png" width="400">
+
+### [tooltip-line_nearest_pointstyle](../tests/fixtures/tooltip/line_nearest_pointstyle.json)
+
+<img src="gallery/tooltip-line_nearest_pointstyle-light.png" width="400"> <img src="gallery/tooltip-line_nearest_pointstyle-dark.png" width="400">
+
+### [tooltip-scatter_bottom_left](../tests/fixtures/tooltip/scatter_bottom_left.json)
+
+<img src="gallery/tooltip-scatter_bottom_left-light.png" width="400"> <img src="gallery/tooltip-scatter_bottom_left-dark.png" width="400">
+
+### [tooltip-scatter_edges](../tests/fixtures/tooltip/scatter_edges.json)
+
+<img src="gallery/tooltip-scatter_edges-light.png" width="400"> <img src="gallery/tooltip-scatter_edges-dark.png" width="400">

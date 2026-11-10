@@ -882,7 +882,7 @@ struct RRect {
 }
 
 impl Bar {
-    fn bounds(&self) -> (f64, f64, f64, f64) {
+    pub fn bounds(&self) -> (f64, f64, f64, f64) {
         if self.horizontal {
             let half = self.height / 2.0;
             (self.x.min(self.base), self.y - half, self.x.max(self.base), self.y + half)

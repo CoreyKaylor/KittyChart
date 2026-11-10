@@ -36,12 +36,7 @@ fn every_fixture_renders_the_same_as_svg() {
     for file in files {
         let json = std::fs::read_to_string(&file).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let kc = &v["_kc"];
-        let num = |k: &str, d: f64| kc.get(k).and_then(serde_json::Value::as_f64).unwrap_or(d) as f32;
-        let mut opts = RenderOptions::new(num("width", 512.0)).dpr(num("dpr", 1.0));
-        opts.height = kc.get("height").and_then(serde_json::Value::as_f64).map(|h| h as f32);
-        opts.background =
-            kittychart::parse_color(kc.get("background").and_then(|b| b.as_str()).unwrap_or("#ffffff"));
+        let opts = RenderOptions::from_fixture(&v["_kc"]);
         let config = ChartConfig::from_json(&json).unwrap();
         let png = render(config.clone(), &opts);
         let svg = render_svg(config, &opts);

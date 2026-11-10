@@ -201,6 +201,11 @@ impl CellCanvas {
             TextBaseline::Alphabetic => -CELL_H * 0.3,
             TextBaseline::Bottom | TextBaseline::Ideographic => -CELL_H / 2.0,
         };
+        // Spaces between words are part of the text (they take its background); leading and
+        // trailing spaces leave the graphics underneath alone.
+        let chars: Vec<char> = text.chars().collect();
+        let first = chars.iter().position(|c| *c != ' ');
+        let last = chars.iter().rposition(|c| *c != ' ');
         for (i, ch) in text.chars().enumerate() {
             let k = along + i as f32;
             let (col, row) = if vertical {
@@ -216,7 +221,8 @@ impl CellCanvas {
                 continue;
             }
             let idx = (row as u32 * self.cols + col as u32) as usize;
-            if ch == ' ' {
+            let interior = first.is_some_and(|f| i > f) && last.is_some_and(|l| i < l);
+            if ch == ' ' && !interior {
                 continue;
             }
             self.text[idx] = Some(TextCell { ch, color: rgb, bold });
@@ -233,10 +239,6 @@ impl CellCanvas {
         for r in 0..self.rows {
             for c in 0..self.cols {
                 let idx = (r * self.cols + c) as usize;
-                if let Some(t) = &self.text[idx] {
-                    cells.push(Cell { ch: t.ch, fg: t.color, bg: None, bold: t.bold });
-                    continue;
-                }
                 let mut sub: Vec<Option<Rgb>> = Vec::with_capacity((sx * sy) as usize);
                 for y in 0..sy {
                     for x in 0..sx {
@@ -244,6 +246,18 @@ impl CellCanvas {
                         let a = px[p + 3];
                         sub.push((a >= 96).then(|| [px[p], px[p + 1], px[p + 2]]));
                     }
+                }
+                if let Some(t) = &self.text[idx] {
+                    // Text over a filled region (a tooltip, a bar) keeps the region's color
+                    // behind it, so it reads as text on that surface.
+                    let filled: Vec<Rgb> = sub.iter().flatten().copied().collect();
+                    let bg = (filled.len() * 2 >= sub.len()).then(|| {
+                        let n = filled.len() as u32;
+                        let avg = |k: usize| (filled.iter().map(|p| u32::from(p[k])).sum::<u32>() / n) as u8;
+                        [avg(0), avg(1), avg(2)]
+                    });
+                    cells.push(Cell { ch: t.ch, fg: t.color, bg, bold: t.bold });
+                    continue;
                 }
                 let line_ink = |x: u32, y: u32| {
                     let l = lines_px.as_ref()?;

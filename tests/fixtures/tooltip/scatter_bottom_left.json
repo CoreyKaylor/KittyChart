@@ -1,0 +1,6 @@
+{
+  "type": "scatter",
+  "data": { "datasets": [{ "label": "Corner", "data": [{ "x": 0, "y": 0 }, { "x": 10, "y": 10 }] }] },
+  "options": { "plugins": { "tooltip": { "displayColors": false, "titleAlign": "center", "bodyAlign": "right" } } },
+  "_kc": { "width": 512, "height": 256, "active": [[0, 0]], "tooltip": { "position": { "x": 0, "y": 0 } } }
+}

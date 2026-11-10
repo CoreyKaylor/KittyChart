@@ -1,0 +1,12 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["Q1", "Q2", "Q3"],
+    "datasets": [
+      { "label": "Default hover colors", "data": [12, 19, 7], "borderWidth": 2 },
+      { "label": "Explicit hover", "data": [8, 11, 14], "borderWidth": 2,
+        "hoverBackgroundColor": "#ffcd56", "hoverBorderColor": "#000", "hoverBorderWidth": 4 }
+    ]
+  },
+  "_kc": { "width": 512, "height": 256, "active": [[0, 1], [1, 1]] }
+}

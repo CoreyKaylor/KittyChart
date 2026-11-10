@@ -110,6 +110,19 @@ for (const file of walk(fixturesDir)) {
       },
     }];
     const chart = new Chart(canvas, config);
+    if (kc.hidden || kc.hiddenData) {
+      // Legend-click state: datasets hidden, or pie/doughnut/polar data toggled.
+      for (const d of kc.hidden ?? []) chart.setDatasetVisibility(d, false);
+      for (const i of kc.hiddenData ?? []) chart.toggleDataVisibility(i);
+      chart.update('none');
+    }
+    if (kc.active) {
+      // Hover state: elements drawn with their hover styles (setActiveElements).
+      const active = kc.active.map(([datasetIndex, index]) => ({ datasetIndex, index }));
+      chart.setActiveElements(active);
+      if (kc.tooltip) chart.tooltip.setActiveElements(active, kc.tooltip.position ?? { x: 0, y: 0 });
+      chart.update('none');
+    }
     const url = canvas.toDataURL('image/png');
     chart.destroy();
     return url;
