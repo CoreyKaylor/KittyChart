@@ -2,10 +2,12 @@
 //!
 //! - [`kitty`]: an independent decoder for kitty graphics escapes. Encoder tests round-trip
 //!   through it, so they never need a terminal.
+//! - [`sixel`]: an independent sixel decoder.
 //! - [`golden`]: golden-image assertions with a perceptual tolerance, blessing, and diff output.
 
 pub mod golden;
 pub mod kitty;
+pub mod sixel;
 
 use std::path::PathBuf;
 

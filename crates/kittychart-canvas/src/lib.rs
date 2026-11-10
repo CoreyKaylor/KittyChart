@@ -7,6 +7,7 @@
 //! Coordinates are logical ("CSS") pixels. Backends scale by the device pixel ratio internally,
 //! as a browser canvas does when Chart.js sets `devicePixelRatio`.
 
+pub mod cells;
 mod color;
 mod skia;
 mod text;

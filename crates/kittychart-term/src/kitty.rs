@@ -107,6 +107,101 @@ pub fn transmit_and_display(img: RgbaImage<'_>, opts: &TransmitOptions, out: &mu
     write_chunked(&keys, opts.quiet, b64.as_bytes(), out);
 }
 
+/// Transmit an image and create a *virtual* placement for Unicode placeholders (`a=T,U=1`).
+///
+/// Nothing is drawn and the cursor doesn't move. The image appears wherever the terminal finds
+/// placeholder cells ([`placeholder_cell`]) whose foreground color encodes this image id. This
+/// is how images live inside text-based UIs (ratatui, Textual) and tmux: they move, scroll and
+/// clip with the text grid. `opts.columns`/`rows` set the placement's size in cells.
+pub fn transmit_virtual(img: RgbaImage<'_>, opts: &TransmitOptions, out: &mut Vec<u8>) {
+    let mut o = opts.clone();
+    o.hold_cursor = false;
+    let mut tmp = Vec::new();
+    transmit_and_display(img, &o, &mut tmp);
+    // Insert U=1 into the first chunk's control data: "\x1b_Ga=T," -> "\x1b_Ga=T,U=1,".
+    let marker = b"\x1b_Ga=T,";
+    debug_assert!(tmp.starts_with(marker));
+    out.extend_from_slice(marker);
+    out.extend_from_slice(b"U=1,");
+    out.extend_from_slice(&tmp[marker.len()..]);
+}
+
+/// The Unicode placeholder character.
+pub const PLACEHOLDER: char = '\u{10EEEE}';
+
+/// One placeholder cell: U+10EEEE + row and column diacritics, and a third diacritic for the
+/// image id's most significant byte when it is non-zero. Its foreground color must encode the
+/// low 24 bits of the image id ([`placeholder_fg`]).
+pub fn placeholder_cell(row: u32, col: u32, image_id: u32) -> String {
+    use crate::diacritics::DIACRITICS;
+    let d = |n: u32| char::from_u32(DIACRITICS[n as usize % DIACRITICS.len()]).expect("valid diacritic");
+    let mut s = String::with_capacity(12);
+    s.push(PLACEHOLDER);
+    s.push(d(row));
+    s.push(d(col));
+    let msb = image_id >> 24;
+    if msb != 0 {
+        s.push(d(msb));
+    }
+    s
+}
+
+/// The number a row/column diacritic encodes (the inverse of [`placeholder_cell`]'s encoding).
+pub fn diacritic_index(c: char) -> Option<u32> {
+    crate::diacritics::DIACRITICS.iter().position(|&d| d == c as u32).map(|i| i as u32)
+}
+
+/// The 24-bit foreground color that identifies `image_id` in placeholder cells.
+pub fn placeholder_fg(image_id: u32) -> (u8, u8, u8) {
+    ((image_id >> 16) as u8, (image_id >> 8) as u8, image_id as u8)
+}
+
+/// Placeholder text for a `cols × rows` virtual placement: one line per row, each wrapped in
+/// the id's foreground color and reset. Rows are separated by `\r\n` and the final row has none.
+pub fn placeholder_text(image_id: u32, cols: u32, rows: u32) -> String {
+    let (r, g, b) = placeholder_fg(image_id);
+    let mut s = String::new();
+    for row in 0..rows {
+        if row > 0 {
+            s.push_str("\r\n");
+        }
+        s.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+        for col in 0..cols {
+            s.push_str(&placeholder_cell(row, col, image_id));
+        }
+        s.push_str("\x1b[39m");
+    }
+    s
+}
+
+/// Wrap escape sequences for tmux passthrough (`DCS tmux; … ST`, with ESC doubled). tmux must
+/// have `set -g allow-passthrough on`. Each escape sequence in `bytes` is wrapped separately,
+/// which keeps every passthrough block small.
+pub fn tmux_passthrough(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 64 + 16);
+    let mut i = 0;
+    while i < bytes.len() {
+        // Find the end of this escape sequence (ST = ESC \\), or pass plain bytes through.
+        if bytes[i] == 0x1b {
+            let end =
+                bytes[i + 1..].windows(2).position(|w| w == b"\x1b\\").map_or(bytes.len(), |p| i + 1 + p + 2);
+            out.extend_from_slice(b"\x1bPtmux;");
+            for &b in &bytes[i..end] {
+                if b == 0x1b {
+                    out.push(0x1b);
+                }
+                out.push(b);
+            }
+            out.extend_from_slice(b"\x1b\\");
+            i = end;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Delete an image by id together with its placements and stored data (`a=d,d=I`).
 pub fn delete_image(image_id: u32, quiet: Quiet, out: &mut Vec<u8>) {
     write!(DisplayVec(out), "\x1b_Ga=d,d=I,i={image_id},q={}\x1b\\", quiet.value()).unwrap();
@@ -161,6 +256,14 @@ mod tests {
         o.compress = false;
         transmit_and_display(RgbaImage::new(1, 1, &px), &o, &mut out);
         assert_eq!(out, b"\x1b_Ga=T,f=32,s=1,v=1,i=7,q=2;/wAA/w==\x1b\\");
+    }
+
+    #[test]
+    fn placeholders_and_tmux() {
+        assert_eq!(placeholder_cell(0, 2, 7), "\u{10EEEE}\u{0305}\u{030E}");
+        assert_eq!(placeholder_cell(1, 0, 0x0300_0001).chars().count(), 4, "high byte adds a diacritic");
+        assert_eq!(placeholder_fg(0x0012_3456), (0x12, 0x34, 0x56));
+        assert_eq!(tmux_passthrough(b"\x1b_Ga=q\x1b\\x"), b"\x1bPtmux;\x1b\x1b_Ga=q\x1b\x1b\\\x1b\\x");
     }
 
     #[test]

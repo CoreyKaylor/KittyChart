@@ -63,5 +63,8 @@ jobs:
           install_args: "zig aqua:nextest-rs/nextest/cargo-nextest"
       - uses: Swatinem/rust-cache@v2
         with: { key: libghostty }
+      # libsixel's decoder checks the sixel encoder independently of our own decoder; tmux is
+      # the multiplexer in the end-to-end tests.
+      - run: sudo apt-get update && sudo apt-get install -y libsixel-bin tmux
       - run: cargo clippy -p kittychart-conformance --all-targets -- -D warnings
       - run: cargo nextest run --profile ci -p kittychart-conformance

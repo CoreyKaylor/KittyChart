@@ -61,10 +61,17 @@ impl Tty {
     /// Ask the terminal what it supports. Returns once the DA1 sentinel arrives, or with whatever
     /// was learned when `timeout` elapses. Replies that arrive late are drained (and the input
     /// queue flushed) before cooked mode is restored, so they can't reach the shell.
+    /// Query the terminal's capabilities. Inside tmux (`$TMUX` set), the queries go to the
+    /// outer terminal through passthrough (see [`Detector::in_tmux`]).
     pub fn query(&self, timeout: Duration) -> io::Result<Capabilities> {
+        let d = if in_tmux() { Detector::new().in_tmux() } else { Detector::new() };
+        self.query_with(d, timeout)
+    }
+
+    /// [`Tty::query`] with a configured detector (e.g. [`Detector::in_tmux`]).
+    pub fn query_with(&self, mut detector: Detector, timeout: Duration) -> io::Result<Capabilities> {
         let _raw = RawMode::enable(&self.file)?;
         let mut f = &self.file; // `&File` implements Read + Write
-        let mut detector = Detector::new();
         f.write_all(&detector.queries())?;
         f.flush()?;
         let deadline = Instant::now() + timeout;
@@ -125,4 +132,10 @@ impl Drop for RawMode<'_> {
     fn drop(&mut self) {
         let _ = tcsetattr(self.file, OptionalActions::Now, &self.saved);
     }
+}
+
+/// Whether this process runs inside tmux. Graphics must then be wrapped for passthrough and
+/// drawn with Unicode placeholders.
+pub fn in_tmux() -> bool {
+    std::env::var_os("TMUX").is_some_and(|v| !v.is_empty())
 }

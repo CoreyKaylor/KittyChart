@@ -46,6 +46,10 @@ pub struct Detector {
     buf: Vec<u8>,
     caps: Capabilities,
     done: bool,
+    tmux: bool,
+    /// DA1 replies seen: one from the terminal, or in tmux one from tmux and one from the
+    /// outer terminal (via passthrough).
+    da1_seen: u8,
 }
 
 impl Detector {
@@ -53,10 +57,25 @@ impl Detector {
         Self::default()
     }
 
+    /// Running inside tmux. The kitty probe goes to the outer terminal through passthrough
+    /// (`allow-passthrough on`), followed by a passthrough DA1: tmux answers its own DA1
+    /// immediately, so only the outer terminal's DA1 proves the probe's reply has arrived.
+    /// Sixel then counts only when both tmux and the outer terminal support it. Without
+    /// passthrough the outer DA1 never comes; the host's timeout ends detection with
+    /// kitty graphics and sixel off.
+    pub fn in_tmux(mut self) -> Self {
+        self.tmux = true;
+        self
+    }
+
     /// The bytes to send to the terminal: kitty probe, cell-size report, then the DA1 sentinel.
     pub fn queries(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(64);
         kitty::support_query(KITTY_PROBE_ID, &mut out);
+        if self.tmux {
+            out.extend_from_slice(b"\x1b[c");
+            out = tmux_passthrough_all(&out);
+        }
         out.extend_from_slice(b"\x1b[16t"); // report cell size in pixels
         out.extend_from_slice(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\"); // default fg / bg
         for i in 0..16 {
@@ -93,7 +112,13 @@ impl Detector {
 
     /// Call when the host's timeout expires with no DA1 reply. The terminal is assumed to
     /// support nothing beyond what was already seen.
-    pub fn finish_timeout(self) -> Capabilities {
+    pub fn finish_timeout(mut self) -> Capabilities {
+        if self.tmux && self.da1_seen < 2 {
+            // The outer terminal never answered: passthrough is off, so neither kitty
+            // graphics nor sixel can reach it.
+            self.caps.sixel = false;
+            self.caps.kitty_graphics = false;
+        }
         self.caps
     }
 
@@ -137,9 +162,14 @@ impl Detector {
                 let params = &b[2..2 + fin];
                 match b[2 + fin] {
                     b'c' if params.first() == Some(&b'?') => {
-                        self.caps.da1 = parse_nums(&params[1..]);
-                        self.caps.sixel = self.caps.da1.contains(&4);
-                        self.done = true;
+                        let attrs = parse_nums(&params[1..]);
+                        let sixel = attrs.contains(&4);
+                        self.caps.sixel = if self.da1_seen == 0 { sixel } else { self.caps.sixel && sixel };
+                        if self.da1_seen == 0 {
+                            self.caps.da1 = attrs;
+                        }
+                        self.da1_seen += 1;
+                        self.done = self.da1_seen >= if self.tmux { 2 } else { 1 };
                     }
                     b't' => {
                         if let [6, h, w] = parse_nums(params)[..] {
@@ -204,6 +234,20 @@ enum Parse {
     Skip,
 }
 
+/// One passthrough block for a run of escape sequences (DA1 is a CSI, which
+/// [`kitty::tmux_passthrough`] doesn't delimit).
+fn tmux_passthrough_all(bytes: &[u8]) -> Vec<u8> {
+    let mut out = b"\x1bPtmux;".to_vec();
+    for &b in bytes {
+        if b == 0x1b {
+            out.push(0x1b);
+        }
+        out.push(b);
+    }
+    out.extend_from_slice(b"\x1b\\");
+    out
+}
+
 fn find_st(b: &[u8]) -> Option<usize> {
     b.windows(2).position(|w| w == b"\x1b\\").filter(|&p| p >= 2)
 }
@@ -232,6 +276,33 @@ mod tests {
         assert!(caps.kitty_graphics);
         assert!(!caps.sixel);
         assert_eq!(caps.cell_px, Some((10, 20)));
+    }
+
+    #[test]
+    fn tmux_waits_for_the_outer_terminal() {
+        let mut d = Detector::new().in_tmux();
+        let q = d.queries();
+        assert!(q.starts_with(b"\x1bPtmux;\x1b\x1b_G"), "probe goes through passthrough");
+        assert!(q.ends_with(b"\x1b[c"), "tmux's own DA1 last");
+        // tmux answers its own DA1 at once (advertising sixel); the outer terminal's replies
+        // come later, in order: kitty OK, then its DA1 (no sixel).
+        assert!(d.feed(b"\x1b[?62;4;22c").is_none(), "tmux's DA1 alone isn't the sentinel");
+        let caps = d.feed(&[KITTY_OK, b"\x1b[?62;22c"].concat()).cloned().unwrap();
+        assert!(caps.kitty_graphics);
+        assert!(!caps.sixel, "the outer terminal can't show sixel, so tmux can't either");
+    }
+
+    #[test]
+    fn tmux_outer_reply_first_and_passthrough_off() {
+        let mut d = Detector::new().in_tmux();
+        assert!(d.feed(&[KITTY_OK, b"\x1b[?62;4c"].concat()).is_none());
+        assert!(d.feed(b"\x1b[?62;4;22c").unwrap().sixel, "both support sixel");
+
+        // Passthrough off: only tmux answers; the host times out.
+        let mut d = Detector::new().in_tmux();
+        assert!(d.feed(b"\x1b[?62;4;22c").is_none());
+        let caps = d.finish_timeout();
+        assert!(!caps.sixel && !caps.kitty_graphics);
     }
 
     #[test]

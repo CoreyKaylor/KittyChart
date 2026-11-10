@@ -15,25 +15,45 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use kittychart::ChartConfig;
-use kittychart::terminal::{TermGeometry, TermOptions, render_for_terminal};
+use kittychart::terminal::{Protocol, TermGeometry, TermOptions, render_for_terminal};
 use kittychart_canvas::{Canvas, Color, Font, FontContext, Paint, SkiaCanvas, TextAlign, TextBaseline};
 use kittychart_term::detect::Detector;
+use kittychart_term::kitty;
 use libghostty_vt::kitty::graphics::PlacementIterator;
 use libghostty_vt::render::{CellIterator, RowIterator};
-use libghostty_vt::style::{Palette, RgbColor};
-use libghostty_vt::terminal::{
-    ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, PrimaryDeviceAttributes,
-    SecondaryDeviceAttributes, SizeReportSize, TertiaryDeviceAttributes,
-};
-use libghostty_vt::{RenderState, Terminal, TerminalOptions};
+use libghostty_vt::style::RgbColor;
+use libghostty_vt::{RenderState, Terminal};
 use theme::Theme;
 
 #[derive(Debug, Parser)]
 #[command(about = "Screenshot KittyChart output inside a simulated terminal")]
 struct Args {
     /// Chart.js config files.
-    #[arg(required = true)]
+    #[arg(required_unless_present = "exec")]
     files: Vec<PathBuf>,
+    /// Instead of simulating the CLI: run this real command (whitespace-separated argv) on a
+    /// PTY attached to the simulated terminal, and screenshot the screen.
+    #[arg(long)]
+    exec: Option<String>,
+    /// With --exec: extra environment, NAME=VALUE (repeatable).
+    #[arg(long)]
+    env: Vec<String>,
+    /// With --exec: keys to type, "MS:TEXT,…" (escapes \r \n \e \s).
+    #[arg(long, default_value = "")]
+    keys: String,
+    /// With --exec: screenshot at this many ms (then kill the command) instead of at exit.
+    #[arg(long)]
+    at: Option<u64>,
+    /// With --exec: terminal height in rows.
+    #[arg(long, default_value_t = 40)]
+    rows: u16,
+    /// With --exec: a terminal without kitty graphics (image storage disabled), to check
+    /// fallbacks.
+    #[arg(long)]
+    no_graphics: bool,
+    /// With --exec: also save everything the command wrote to this file.
+    #[arg(long)]
+    raw: Option<PathBuf>,
     /// Comma-separated themes: built-in names or Ghostty theme files.
     #[arg(long, value_delimiter = ',', default_values_t = theme::BUILTIN.iter().map(|s| s.to_string()))]
     theme: Vec<String>,
@@ -49,6 +69,10 @@ struct Args {
     /// Output contact sheet.
     #[arg(long, default_value = "target/preview/sheet.png")]
     sheet: PathBuf,
+    /// Output protocol: kitty, placeholders (kitty via Unicode placeholders), sixel, or the
+    /// text fallbacks auto, blocks, half, braille.
+    #[arg(long, default_value = "kitty")]
+    protocol: String,
     /// Use Chart.js's default colors instead of terminal-derived ones (what the CLI's
     /// `--colors chartjs` does).
     #[arg(long)]
@@ -72,13 +96,54 @@ fn main() {
     let fonts = Arc::new(Mutex::new(FontContext::with_system_fonts()));
 
     let mut shots = Vec::new();
+    if let Some(exec) = &args.exec {
+        let argv: Vec<String> = exec.split_whitespace().map(str::to_owned).collect();
+        let env: Vec<(String, String)> = args
+            .env
+            .iter()
+            .map(|e| e.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned())).expect("--env NAME=VALUE"))
+            .collect();
+        let keys = kittychart_conformance::pty::parse_keys(&args.keys);
+        for th in &themes {
+            let (mut t, replies) = new_terminal(th, args.cols, args.rows, cw, ch);
+            if args.no_graphics {
+                t.set_kitty_image_storage_limit(0).expect("disable kitty graphics");
+            }
+            let out = kittychart_conformance::pty::run(
+                &mut t,
+                &replies,
+                &argv,
+                &env,
+                (args.cols, args.rows, cw, ch),
+                &keys,
+                args.at.map(std::time::Duration::from_millis),
+                std::time::Duration::from_secs(60),
+            );
+            eprintln!("exec {:?}: exit {:?}, {} bytes", th.name, out.exit, out.output.len());
+            if let Some(raw) = &args.raw {
+                std::fs::write(raw, &out.output).expect("write --raw");
+            }
+            shots
+                .push((format!("{exec} · {}", th.name), paint(&t, th, args.cols, args.rows, cw, ch, &fonts)));
+        }
+    }
     for file in &args.files {
         let json = std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
         let config = ChartConfig::from_json(&json).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
         let name = file.file_name().map_or("chart".into(), |n| n.to_string_lossy().into_owned());
         for th in &themes {
-            let shot =
-                session(&config, &name, th, args.cols, cw, ch, args.chart_cols, args.chartjs_colors, &fonts);
+            let shot = session(
+                &config,
+                &name,
+                th,
+                args.cols,
+                cw,
+                ch,
+                args.chart_cols,
+                args.chartjs_colors,
+                &args.protocol,
+                &fonts,
+            );
             shots.push((format!("{name} · {}", th.name), shot));
         }
     }
@@ -93,10 +158,6 @@ fn main() {
 
 type Shot = (u32, u32, Vec<u8>);
 
-fn rgb(c: [u8; 3]) -> RgbColor {
-    RgbColor { r: c[0], g: c[1], b: c[2] }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn session(
     config: &ChartConfig,
@@ -107,6 +168,7 @@ fn session(
     ch: u32,
     chart_cols: Option<u16>,
     chartjs_colors: bool,
+    protocol: &str,
     fonts: &Arc<Mutex<FontContext>>,
 ) -> Shot {
     // First lay out the chart to learn how many rows the session needs.
@@ -114,39 +176,7 @@ fn session(
     let opts = TermOptions { cols: chart_cols, ..TermOptions::default() };
     let rows = render_for_terminal(config.clone(), geom, &opts).rows + 3;
 
-    let mut t = Terminal::new(TerminalOptions { cols, rows, max_scrollback: 0 }).expect("terminal");
-    t.resize(cols, rows, cw, ch).expect("resize");
-    t.set_kitty_image_storage_limit(256 * 1024 * 1024).expect("kitty graphics");
-    t.set_default_bg_color(Some(rgb(th.background))).expect("bg");
-    t.set_default_fg_color(Some(rgb(th.foreground))).expect("fg");
-    t.set_default_cursor_color(Some(rgb(th.cursor))).expect("cursor");
-    let mut pal = t.default_color_palette().expect("palette").0;
-    for (i, c) in th.palette.iter().enumerate() {
-        pal[i] = rgb(*c);
-    }
-    t.set_default_color_palette(Some(Palette(pal))).expect("palette");
-
-    // Capability detection, as the CLI does it, answered by the terminal.
-    let replies = Rc::new(RefCell::new(Vec::new()));
-    let r = replies.clone();
-    t.on_pty_write(move |_, d| r.borrow_mut().extend_from_slice(d)).expect("pty");
-    t.on_device_attributes(|_| {
-        Some(DeviceAttributes {
-            primary: PrimaryDeviceAttributes::new(
-                ConformanceLevel::VT220,
-                &[DeviceAttributeFeature::ANSI_COLOR],
-            ),
-            secondary: SecondaryDeviceAttributes {
-                device_type: DeviceType::VT220,
-                firmware_version: 1,
-                rom_cartridge: 0,
-            },
-            tertiary: TertiaryDeviceAttributes { unit_id: 0 },
-        })
-    })
-    .expect("da");
-    t.on_size(move |_| Some(SizeReportSize { rows, columns: cols, cell_width: cw, cell_height: ch }))
-        .expect("size");
+    let (mut t, replies) = new_terminal(th, cols, rows, cw, ch);
 
     let prompt = format!("\x1b[34m~/projects/demo\x1b[0m \x1b[32m❯\x1b[0m kittychart {file_name}\r\n");
     t.vt_write(prompt.as_bytes());
@@ -183,15 +213,83 @@ fn session(
             hex(t.grid)
         );
     }
-    let opts = TermOptions { colors, ..opts };
-    let out = render_for_terminal(config.clone(), geom, &opts);
+    let opts = TermOptions { colors: colors.clone(), ..opts };
+    let mut sixel = None;
+    let out = if protocol == "kitty" || protocol == "placeholders" {
+        render_for_terminal(
+            config.clone(),
+            geom,
+            &TermOptions { placeholders: protocol == "placeholders", ..opts },
+        )
+    } else if protocol == "sixel" {
+        // Ghostty has no sixel: decode our bytes independently and paint them where the
+        // cursor was, after moving the cursor past the image as a sixel terminal would.
+        let r = render_for_terminal(config.clone(), geom, &TermOptions { protocol: Protocol::Sixel, ..opts });
+        let at = (t.cursor_x().unwrap_or(0), t.cursor_y().unwrap_or(0));
+        sixel = Some((at, kittychart_testkit::sixel::decode(&r.bytes)));
+        kittychart::terminal::TermRender { bytes: "\n".repeat(usize::from(r.rows)).into_bytes(), ..r }
+    } else {
+        use kittychart_canvas::cells::CellMode;
+        let mode = match protocol {
+            "braille" => CellMode::Braille,
+            "half" => CellMode::HalfBlocks,
+            "blocks" => CellMode::Blocks,
+            _ => CellMode::Auto,
+        };
+        let full = render_for_terminal(config.clone(), geom, &opts); // same footprint as kitty
+        let grid = kittychart::render_cells(
+            config.clone(),
+            u32::from(full.cols),
+            u32::from(full.rows),
+            mode,
+            colors.as_ref().map(kittychart::Theme::from_terminal),
+        );
+        kittychart::terminal::TermRender { bytes: format!("{}\n", grid.to_ansi()).into_bytes(), ..full }
+    };
     // The tty's ONLCR turns "\n" into "\r\n".
     let bytes: Vec<u8> =
         out.bytes.iter().flat_map(|&b| if b == b'\n' { vec![b'\r', b'\n'] } else { vec![b] }).collect();
     t.vt_write(&bytes);
     t.vt_write("\x1b[34m~/projects/demo\x1b[0m \x1b[32m❯\x1b[0m ".as_bytes());
 
-    paint(&t, th, cols, rows, cw, ch, fonts)
+    let mut shot = paint(&t, th, cols, rows, cw, ch, fonts);
+    if let Some(((x, y), img)) = sixel {
+        let pad = cw as usize;
+        let (sw, _) = (shot.0 as usize, shot.1 as usize);
+        for py in 0..img.height as usize {
+            for px in 0..img.width as usize {
+                let s = (py * img.width as usize + px) * 4;
+                if img.rgba[s + 3] == 0 {
+                    continue;
+                }
+                let (dx, dy) =
+                    (pad + usize::from(x) * cw as usize + px, pad + usize::from(y) * ch as usize + py);
+                let d = (dy * sw + dx) * 4;
+                if d + 4 <= shot.2.len() {
+                    shot.2[d..d + 4].copy_from_slice(&img.rgba[s..s + 4]);
+                }
+            }
+        }
+    }
+    shot
+}
+
+/// A simulated terminal with `th`'s colors that answers queries (DA1, cell size, kitty
+/// graphics, OSC colors); replies collect in the returned buffer.
+fn new_terminal(
+    th: &Theme,
+    cols: u16,
+    rows: u16,
+    cw: u32,
+    ch: u32,
+) -> (Terminal<'static, 'static>, Rc<RefCell<Vec<u8>>>) {
+    let colors = kittychart_conformance::Colors {
+        background: th.background,
+        foreground: th.foreground,
+        cursor: th.cursor,
+        palette: th.palette,
+    };
+    kittychart_conformance::answering_terminal(cols, rows, cw, ch, &colors)
 }
 
 fn paint(
@@ -230,7 +328,32 @@ fn paint(
                 c.fill_rect(px, py, cw as f32, ch as f32);
             }
             let g = cell.graphemes().unwrap_or_default();
-            if !g.is_empty() {
+            if g.first() == Some(&kitty::PLACEHOLDER) {
+                // A Unicode placeholder: draw this cell's tile of the image its color names.
+                let fg = cell.fg_color().ok().flatten().unwrap_or(colors.foreground);
+                let id = (u32::from(fg.r) << 16) | (u32::from(fg.g) << 8) | u32::from(fg.b);
+                let (row, col) = (
+                    g.get(1).and_then(|&d| kitty::diacritic_index(d)).unwrap_or(0),
+                    g.get(2).and_then(|&d| kitty::diacritic_index(d)).unwrap_or(0),
+                );
+                let gr = t.kitty_graphics().expect("graphics");
+                if let Some(img) = gr.image(id) {
+                    let (iw, ih) = (img.width().expect("w"), img.height().expect("h"));
+                    let data = img.data().expect("data");
+                    let mut tile = vec![0u8; (cw * ch * 4) as usize];
+                    for ty in 0..ch {
+                        for tx in 0..cw {
+                            let (sx, sy) = (col * cw + tx, row * ch + ty);
+                            if sx < iw && sy < ih {
+                                let s = ((sy * iw + sx) * 4) as usize;
+                                let d = ((ty * cw + tx) * 4) as usize;
+                                tile[d..d + 4].copy_from_slice(&data[s..s + 4]);
+                            }
+                        }
+                    }
+                    c.draw_rgba_device(px, py, cw as f32, ch as f32, &tile, cw, ch);
+                }
+            } else if !g.is_empty() {
                 let style = cell.style().ok();
                 let fg = cell.fg_color().ok().flatten().unwrap_or(colors.foreground);
                 c.set_font(Font {
@@ -240,8 +363,11 @@ fn paint(
                     italic: false,
                 });
                 c.set_fill_style(Paint::Solid(col(fg)));
-                let s: String = g.into_iter().collect();
-                c.fill_text(&s, px, py + ch as f32 / 2.0, None);
+                let first = g[0];
+                if !draw_block_glyph(&mut c, first, px, py, cw as f32, ch as f32) {
+                    let s: String = g.into_iter().collect();
+                    c.fill_text(&s, px, py + ch as f32 / 2.0, None);
+                }
             }
             x += 1;
         }
@@ -280,6 +406,72 @@ fn paint(
         );
     }
     (c.pixel_width(), c.pixel_height(), c.to_rgba())
+}
+
+/// Draw block elements and Braille as geometry, as terminals do (Ghostty and kitty render
+/// them as sprites that tile seamlessly, not with the font). Uses the current fill style.
+fn draw_block_glyph(c: &mut SkiaCanvas, ch: char, x: f32, y: f32, w: f32, h: f32) -> bool {
+    let cp = ch as u32;
+    let rect = |c: &mut SkiaCanvas, fx: f32, fy: f32, fw: f32, fh: f32| {
+        c.fill_rect(x + fx * w, y + fy * h, fw * w, fh * h)
+    };
+    match cp {
+        0x2588 => rect(c, 0.0, 0.0, 1.0, 1.0), // █
+        0x2580 => rect(c, 0.0, 0.0, 1.0, 0.5), // ▀
+        0x2584 => rect(c, 0.0, 0.5, 1.0, 0.5), // ▄
+        0x258C => rect(c, 0.0, 0.0, 0.5, 1.0), // ▌
+        0x2590 => rect(c, 0.5, 0.0, 0.5, 1.0), // ▐
+        0x2596..=0x259F => {
+            // Quadrants: bit 0 TL, 1 TR, 2 BL, 3 BR.
+            let mask: u32 = match cp {
+                0x2596 => 0b0100, // ▖
+                0x2597 => 0b1000, // ▗
+                0x2598 => 0b0001, // ▘
+                0x2599 => 0b1101, // ▙
+                0x259A => 0b1001, // ▚
+                0x259B => 0b0111, // ▛
+                0x259C => 0b1011, // ▜
+                0x259D => 0b0010, // ▝
+                0x259E => 0b0110, // ▞
+                _ => 0b1110,      // ▟
+            };
+            for (bit, (fx, fy)) in [(0.0, 0.0), (0.5, 0.0), (0.0, 0.5), (0.5, 0.5)].iter().enumerate() {
+                if mask & (1 << bit) != 0 {
+                    rect(c, *fx, *fy, 0.5, 0.5);
+                }
+            }
+        }
+        0x2801..=0x28FF => {
+            let bits = cp - 0x2800;
+            const POS: [(u32, f32, f32); 8] = [
+                (0x01, 0.0, 0.0),
+                (0x02, 0.0, 1.0),
+                (0x04, 0.0, 2.0),
+                (0x40, 0.0, 3.0),
+                (0x08, 1.0, 0.0),
+                (0x10, 1.0, 1.0),
+                (0x20, 1.0, 2.0),
+                (0x80, 1.0, 3.0),
+            ];
+            let r = (w / 2.0).min(h / 4.0) * 0.32;
+            for (bit, dx, dy) in POS {
+                if bits & bit != 0 {
+                    c.begin_path();
+                    c.arc(
+                        x + (dx + 0.5) * w / 2.0,
+                        y + (dy + 0.5) * h / 4.0,
+                        r,
+                        0.0,
+                        std::f32::consts::TAU,
+                        false,
+                    );
+                    c.fill();
+                }
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn contact_sheet(

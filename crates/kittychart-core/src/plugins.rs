@@ -165,6 +165,9 @@ pub struct LegendLabels {
     pub use_point_style: bool,
     pub point_style_width: Option<f64>,
     pub text_align: TextAlign,
+    /// Drawing onto terminal cells of this size (width, height): the box snaps to whole
+    /// columns and to the middle of its label's row, so it sits on the label's text line.
+    pub cell: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -486,20 +489,25 @@ impl Legend {
         let dash: Vec<f32> = item.line_dash.iter().map(|d| *d as f32).collect();
         c.set_line_dash(&dash);
         if self.labels.use_point_style {
-            let radius = box_height * std::f64::consts::SQRT_2 / 2.0;
+            let mut radius = box_height * std::f64::consts::SQRT_2 / 2.0;
             let w = self.labels.point_style_width.map(|_| box_width);
-            draw_point(
-                c,
-                item.point_style,
-                radius,
-                item.rotation,
-                item.line_width,
-                x + box_width / 2.0,
-                y + half,
-                w,
-            );
+            let (mut cx, mut cy) = (x + box_width / 2.0, y + half);
+            if let Some((cw, rh)) = self.labels.cell {
+                // Centered on the label's row, within one row, on a column boundary.
+                cy = ((cy / rh).floor() + 0.5) * rh;
+                cx = (cx / cw).round() * cw;
+                radius = radius.min(rh * 0.45);
+            }
+            draw_point(c, item.point_style, radius, item.rotation, item.line_width, cx, cy, w);
         } else {
-            let y_top = y + ((self.labels.font.size - box_height) / 2.0).max(0.0);
+            let mut y_top = y + ((self.labels.font.size - box_height) / 2.0).max(0.0);
+            let (mut x, mut box_width, mut box_height) = (x, box_width, box_height);
+            if let Some((cw, rh)) = self.labels.cell {
+                let row = ((y_top + box_height / 2.0) / rh).floor();
+                (y_top, box_height) = (row * rh + rh * 0.25, rh * 0.5);
+                // Floor, so the label (placed after the unsnapped box) keeps a gap.
+                (x, box_width) = ((x / cw).floor() * cw, ((box_width / cw).round() * cw).max(cw));
+            }
             c.begin_path();
             match item.border_radius {
                 Some(r) if r.any() => rounded_rect_path(c, x, y_top, box_width, box_height, r),

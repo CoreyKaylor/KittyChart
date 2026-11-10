@@ -109,6 +109,8 @@ pub struct Chart {
     /// Terminal-derived defaults (see [`crate::theme`]). `{}` when rendering as plain Chart.js.
     theme_layer: Value,
     theme_scale: Value,
+    /// Drawing onto terminal cells.
+    cells: bool,
 }
 
 impl Chart {
@@ -119,9 +121,28 @@ impl Chart {
     /// Build a chart whose *defaults* come from a terminal theme. Explicit colors in the config
     /// still win. `None` gives exact Chart.js defaults.
     pub fn with_theme(config: ChartConfig, theme: Option<crate::theme::Theme>) -> Chart {
+        Self::build(config, theme, false)
+    }
+
+    /// For drawing onto terminal cells ([`kittychart_canvas::cells::CellCanvas`]): text can't
+    /// rotate, so tick labels stay horizontal and autoskip thins them instead.
+    pub fn for_cells(config: ChartConfig, theme: Option<crate::theme::Theme>) -> Chart {
+        Self::build(config, theme, true)
+    }
+
+    fn build(config: ChartConfig, theme: Option<crate::theme::Theme>, cells: bool) -> Chart {
         let datasets = apply_colors_plugin(&config, theme.as_ref());
         let theme_layer = theme.as_ref().map_or_else(|| json!({}), crate::theme::Theme::defaults_layer);
-        let theme_scale = theme.as_ref().map_or_else(|| json!({}), crate::theme::Theme::scale_layer);
+        let mut theme_scale = theme.as_ref().map_or_else(|| json!({}), crate::theme::Theme::scale_layer);
+        if cells {
+            // Grid lines at cell resolution are heavy bands of blocks; keep the axis lines only.
+            merge_if(
+                &mut theme_scale,
+                &[
+                    &json!({ "ticks": { "maxRotation": 0, "autoSkipPadding": 8 }, "grid": { "display": false } }),
+                ],
+            );
+        }
         let mut font_fallback =
             config.options.get("font").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
         merge_if(&mut font_fallback, &[&DEFAULTS["font"]]);
@@ -152,6 +173,7 @@ impl Chart {
                     use_point_style: false,
                     point_style_width: None,
                     text_align: TextAlign::Left,
+                    cell: None,
                 },
                 LegendTitle {
                     display: false,
@@ -170,6 +192,7 @@ impl Chart {
             font_fallback,
             theme_layer,
             theme_scale,
+            cells,
         };
         chart.build_scales();
         chart.build_metas();
@@ -334,6 +357,11 @@ impl Chart {
         for (id, mut merged) in scales {
             let ty = merged.get("type").and_then(Value::as_str).unwrap_or("linear").to_owned();
             let type_defaults = DEFAULTS["scales"].get(&ty).cloned().unwrap_or(json!({}));
+            if self.cells && merged["axis"] == "y" {
+                // One tick label per ~2 rows: Chart.js spaces ticks by the font's line height,
+                // and a 12px label fills a whole cell row.
+                merge_if(&mut merged, &[&json!({ "ticks": { "font": { "lineHeight": 2.6 } } })]);
+            }
             merge_if(&mut merged, &[&type_defaults, &self.theme_scale, &DEFAULTS["scale"]]);
             if ty == "radialLinear" {
                 let radial_routes = json!({
@@ -812,10 +840,21 @@ impl Chart {
         let l = self.plugin_scopes("legend");
         let labels = l.child("labels");
         let use_point_style = labels.bool_or("usePointStyle", false);
+        // On cells, unless the config says otherwise: a two-character swatch (a 40px box is five
+        // block characters). Item spacing in whole rows: a vertical legend one row apart (12px
+        // text + 4 = one 16px row); a horizontal one 2½ cells between items (and two rows
+        // apart when it wraps).
+        let user = |k: &str| self.config.options.pointer(&format!("/plugins/legend/labels/{k}")).is_some();
+        let vertical = matches!(l.str("position"), Some("left" | "right"));
+        let cell_padding = if vertical { 4.0 } else { 20.0 };
         let legend_labels = LegendLabels {
-            box_width: labels.num_or("boxWidth", 40.0),
+            box_width: if self.cells && !user("boxWidth") { 16.0 } else { labels.num_or("boxWidth", 40.0) },
             box_height: labels.num("boxHeight"),
-            padding: labels.num_or("padding", 10.0),
+            padding: if self.cells && !user("padding") {
+                cell_padding
+            } else {
+                labels.num_or("padding", 10.0)
+            },
             font: FontSpec::resolve(&labels.child("font"), &global_font),
             color: labels.color_at("color", None).or(chart_color),
             use_point_style,
@@ -825,6 +864,10 @@ impl Chart {
                 Some("right") => TextAlign::Right,
                 _ => TextAlign::Left,
             },
+            cell: self.cells.then_some((
+                f64::from(kittychart_canvas::cells::CELL_W),
+                f64::from(kittychart_canvas::cells::CELL_H),
+            )),
         };
         let t = l.child("title");
         let legend_title = LegendTitle {

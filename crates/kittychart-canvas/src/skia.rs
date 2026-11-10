@@ -113,6 +113,37 @@ impl SkiaCanvas {
         c
     }
 
+    /// The current transform as `[sx, ky, kx, sy, tx, ty]` (device pixels).
+    pub fn current_transform(&self) -> [f32; 6] {
+        let t = self.state.transform;
+        [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]
+    }
+
+    /// The current fill style.
+    pub fn fill_paint(&self) -> &Paint {
+        &self.state.fill
+    }
+
+    pub fn stroke_paint(&self) -> &Paint {
+        &self.state.stroke
+    }
+
+    pub fn global_alpha(&self) -> f32 {
+        self.state.alpha
+    }
+
+    pub fn current_text_align(&self) -> TextAlign {
+        self.state.text_align
+    }
+
+    pub fn current_text_baseline(&self) -> TextBaseline {
+        self.state.text_baseline
+    }
+
+    pub fn current_font(&self) -> &Font {
+        &self.state.font
+    }
+
     pub fn pixel_width(&self) -> u32 {
         self.pixmap.width()
     }
@@ -161,6 +192,30 @@ impl SkiaCanvas {
             out.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
         }
         out
+    }
+
+    /// Device-pixel width and height of the current path's bounds.
+    pub fn current_path_size(&self) -> Option<(f32, f32)> {
+        self.current_path().map(|p| (p.bounds().width(), p.bounds().height()))
+    }
+
+    /// Clear the pixels inside the current path (respecting the clip), like
+    /// `globalCompositeOperation = "destination-out"`.
+    pub fn erase_current_path(&mut self) {
+        let Some(path) = self.current_path() else { return };
+        let paint = sk::Paint {
+            shader: sk::Shader::SolidColor(sk::Color::BLACK),
+            blend_mode: sk::BlendMode::DestinationOut,
+            anti_alias: true,
+            ..sk::Paint::default()
+        };
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            sk::FillRule::Winding,
+            sk::Transform::identity(),
+            self.state.clip.as_ref(),
+        );
     }
 
     fn device_point(&self, x: f32, y: f32) -> (f32, f32) {

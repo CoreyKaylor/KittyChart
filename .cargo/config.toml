@@ -1,0 +1,4 @@
+[env]
+# Ghostty's VT core (conformance tests, kc-preview) built with Zig optimizations even in dev
+# builds: Debug mode is ~100× slower on image-heavy output, and ReleaseSafe keeps safety checks.
+LIBGHOSTTY_VT_SYS_OPTIMIZE = "ReleaseSafe"

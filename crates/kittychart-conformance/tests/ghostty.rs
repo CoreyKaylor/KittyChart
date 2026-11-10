@@ -210,3 +210,57 @@ fn detector_against_ghostty() {
     assert_eq!(caps.foreground, Some([0xa9, 0xb1, 0xd6]));
     assert!(caps.full_palette().is_some(), "all 16 palette entries reported: {:?}", caps.palette);
 }
+
+/// Unicode placeholders: a virtual placement plus placeholder cells whose foreground color
+/// carries the image id. This is the path for ratatui/Textual and tmux.
+#[test]
+fn unicode_placeholders_create_virtual_placement() {
+    use libghostty_vt::RenderState;
+    use libghostty_vt::render::{CellIterator, RowIterator};
+
+    let mut t = terminal();
+    let id = 0x00AB_CDEF;
+    let mut o = TransmitOptions::new(id);
+    o.columns = Some(6);
+    o.rows = Some(2);
+    let mut out = Vec::new();
+    kitty::transmit_virtual(RgbaImage::new(60, 40, &pattern(60, 40, 9)), &o, &mut out);
+    t.vt_write(&out);
+    // The transmit must not move the cursor or draw a visible placement.
+    assert_eq!((t.cursor_x().unwrap(), t.cursor_y().unwrap()), (0, 0));
+    t.vt_write(kitty::placeholder_text(id, 6, 2).as_bytes());
+
+    {
+        let g = t.kitty_graphics().unwrap();
+        let mut iter = PlacementIterator::new().unwrap();
+        let mut ps = iter.update(&g).unwrap();
+        let p = ps.next().expect("a placement");
+        assert_eq!(p.image_id().unwrap(), id);
+        assert!(p.is_virtual().unwrap(), "U=1 creates a virtual placement");
+    }
+
+    // Every cell in the 6×2 box holds U+10EEEE in the id's color.
+    let mut rs = RenderState::new().unwrap();
+    let snap = rs.update(&t).unwrap();
+    let mut rows = RowIterator::new().unwrap();
+    let mut cells = CellIterator::new().unwrap();
+    let mut row_it = rows.update(&snap).unwrap();
+    let mut found = 0;
+    let mut r = 0;
+    while let Some(row) = row_it.next() {
+        let mut cell_it = cells.update(row).unwrap();
+        let mut c = 0;
+        while let Some(cell) = cell_it.next() {
+            let gr = cell.graphemes().unwrap();
+            if r < 2 && c < 6 {
+                assert_eq!(gr.first(), Some(&kitty::PLACEHOLDER), "cell {r},{c}");
+                let fg = cell.fg_color().unwrap().expect("explicit fg");
+                assert_eq!((fg.r, fg.g, fg.b), (0xAB, 0xCD, 0xEF));
+                found += 1;
+            }
+            c += 1;
+        }
+        r += 1;
+    }
+    assert_eq!(found, 12);
+}

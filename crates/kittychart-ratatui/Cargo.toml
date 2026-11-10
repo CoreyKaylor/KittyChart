@@ -1,0 +1,23 @@
+[package]
+name = "kittychart-ratatui"
+description = "A ratatui widget for KittyChart: Chart.js charts as kitty graphics (Unicode placeholders) or text cells"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+kittychart = { workspace = true }
+kittychart-canvas = { workspace = true }
+kittychart-term = { workspace = true }
+ratatui-core = "0.1"
+
+[dev-dependencies]
+kittychart-testkit = { workspace = true }
+ratatui = "0.30"
+crossterm = "0.29"
+insta = { workspace = true }
+
+[lints]
+workspace = true

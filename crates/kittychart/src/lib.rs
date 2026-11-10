@@ -94,6 +94,22 @@ pub fn render(config: ChartConfig, opts: &RenderOptions) -> Image {
     Image { width: canvas.pixel_width(), height: canvas.pixel_height(), rgba: canvas.to_rgba() }
 }
 
+/// Render as terminal cells (the text fallback): `cols × rows` cells, graphics as block or
+/// Braille characters, text as real characters. `theme` should come from the terminal's
+/// colors (see [`Theme::from_terminal`]); without it Chart.js's light-page colors are used.
+pub fn render_cells(
+    config: ChartConfig,
+    cols: u32,
+    rows: u32,
+    mode: kittychart_canvas::cells::CellMode,
+    theme: Option<Theme>,
+) -> kittychart_canvas::cells::CellGrid {
+    let mut chart = Chart::for_cells(config, theme);
+    let mut canvas = kittychart_canvas::cells::CellCanvas::new(cols.max(1), rows.max(1), mode);
+    chart.draw(&mut canvas);
+    canvas.into_grid()
+}
+
 /// Parse a Chart.js JSON configuration and render it.
 pub fn render_json(json: &str, opts: &RenderOptions) -> Result<Image, ConfigError> {
     Ok(render(ChartConfig::from_json(json)?, opts))

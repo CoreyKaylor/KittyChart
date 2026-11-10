@@ -6,7 +6,9 @@
 //! byte slices, or against an in-process terminal emulator (see `kittychart-conformance`).
 
 pub mod detect;
+mod diacritics;
 pub mod kitty;
+pub mod sixel;
 #[cfg(all(unix, feature = "tty"))]
 pub mod tty;
 

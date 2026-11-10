@@ -1,7 +1,9 @@
 //! Sizing and encoding a chart for a terminal grid. Sans-IO: callers supply the terminal
 //! geometry (from a real TTY, or a simulated one in tests and previews) and get escape bytes.
 
+use kittychart_canvas::cells::{CELL_H, CELL_W, CellGrid, CellMode};
 use kittychart_term::kitty::{self, TransmitOptions};
+use kittychart_term::sixel::{self, SixelOptions};
 
 use crate::{Chart, ChartConfig, Color, Image, RenderOptions, render};
 
@@ -12,6 +14,16 @@ pub struct TermGeometry {
     /// Cell size in device pixels.
     pub cell_width: f32,
     pub cell_height: f32,
+}
+
+/// How the bitmap is sent to the terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Protocol {
+    /// The kitty graphics protocol (kitty, Ghostty, WezTerm, Konsole …).
+    #[default]
+    Kitty,
+    /// Sixel (foot, xterm, mlterm, Windows Terminal, iTerm2 …).
+    Sixel,
 }
 
 /// How to fit the chart into the terminal. Every field is optional. The bitmap always covers a
@@ -34,6 +46,13 @@ pub struct TermOptions {
     /// The terminal's colors. When set, chart defaults are derived from them (see
     /// [`kittychart_core::theme`]); otherwise Chart.js's defaults are used unchanged.
     pub colors: Option<crate::TerminalColors>,
+    pub protocol: Protocol,
+    /// kitty: draw with Unicode placeholders (a virtual placement plus placeholder text), so
+    /// the image lives in the text grid. Implied by `tmux`.
+    pub placeholders: bool,
+    /// Running inside tmux: kitty escapes are wrapped for passthrough and drawn with
+    /// placeholders, so tmux keeps the image in its pane.
+    pub tmux: bool,
 }
 
 /// A chart laid out for the terminal, with the escape sequences that display it at the cursor.
@@ -43,7 +62,7 @@ pub struct TermRender {
     pub cols: u16,
     pub rows: u16,
     pub scale: f32,
-    /// kitty graphics escapes, followed by a newline that moves the cursor below the image.
+    /// Graphics escapes, followed by a newline that moves the cursor below the image.
     pub bytes: Vec<u8>,
 }
 
@@ -80,12 +99,70 @@ pub fn render_for_terminal(config: ChartConfig, geom: TermGeometry, opts: &TermO
     let image = render(config, &ropts);
 
     let mut bytes = Vec::with_capacity(image.rgba.len() / 4);
-    let mut t = TransmitOptions::new(opts.image_id.unwrap_or(1));
-    t.columns = Some(u32::from(cols));
-    t.rows = Some(u32::from(rows));
-    kitty::transmit_and_display(image.as_term_image(), &t, &mut bytes);
+    match opts.protocol {
+        Protocol::Kitty => {
+            let mut t = TransmitOptions::new(opts.image_id.unwrap_or(1));
+            t.columns = Some(u32::from(cols));
+            t.rows = Some(u32::from(rows));
+            if opts.placeholders || opts.tmux {
+                let mut esc = Vec::new();
+                kitty::transmit_virtual(image.as_term_image(), &t, &mut esc);
+                bytes = if opts.tmux { kitty::tmux_passthrough(&esc) } else { esc };
+                let id = opts.image_id.unwrap_or(1);
+                bytes.extend_from_slice(
+                    kitty::placeholder_text(id, u32::from(cols), u32::from(rows)).as_bytes(),
+                );
+                bytes.push(b'\r');
+            } else {
+                kitty::transmit_and_display(image.as_term_image(), &t, &mut bytes);
+            }
+        }
+        Protocol::Sixel => {
+            let background = opts.colors.as_ref().map(|c| c.background);
+            sixel::encode(
+                image.as_term_image(),
+                &SixelOptions { background, ..SixelOptions::default() },
+                &mut bytes,
+            );
+        }
+    }
     bytes.push(b'\n');
     TermRender { image, cols, rows, scale, bytes }
+}
+
+/// A chart as text cells: the fallback for terminals without graphics.
+#[derive(Debug, Clone)]
+pub struct CellRender {
+    pub grid: CellGrid,
+    /// Truecolor ANSI text, ending with a newline.
+    pub bytes: Vec<u8>,
+}
+
+/// Render as text cells, `cols` wide; `rows` defaults to the chart's aspect ratio (terminal
+/// cells are about twice as tall as wide). With `colors`, chart defaults follow the terminal's
+/// theme.
+pub fn render_cells_for_terminal(
+    config: ChartConfig,
+    cols: u16,
+    rows: Option<u16>,
+    mode: CellMode,
+    colors: Option<&crate::TerminalColors>,
+) -> CellRender {
+    let cols = cols.max(1);
+    let rows = rows.unwrap_or_else(|| {
+        let aspect = Chart::new(config.clone()).aspect_ratio() as f32;
+        ((f32::from(cols) * CELL_W / aspect / CELL_H).round() as u16).max(4)
+    });
+    let grid = crate::render_cells(
+        config,
+        u32::from(cols),
+        u32::from(rows),
+        mode,
+        colors.map(crate::Theme::from_terminal),
+    );
+    let mut bytes = grid.to_ansi().into_bytes();
+    bytes.extend_from_slice(b"\r\n");
+    CellRender { grid, bytes }
 }
 
 #[cfg(test)]
@@ -115,5 +192,34 @@ mod tests {
         let r = render_for_terminal(config(), geom, &opts);
         assert_eq!(r.image.width, u32::from(r.cols) * 16);
         assert_eq!(r.rows, ((160.0 * r.scale) / 34.0f32).round() as u16, "height wins over rows");
+    }
+
+    #[test]
+    fn sixel_output_decodes_to_the_image() {
+        let geom = TermGeometry { cols: 30, cell_width: 8.0, cell_height: 16.0 };
+        let opts = TermOptions { protocol: Protocol::Sixel, ..TermOptions::default() };
+        let r = render_for_terminal(config(), geom, &opts);
+        let d = kittychart_testkit::sixel::decode(&r.bytes);
+        assert_eq!((d.width, d.height), (r.image.width, r.image.height));
+    }
+
+    #[test]
+    fn tmux_wraps_escapes_and_draws_placeholders() {
+        let geom = TermGeometry { cols: 30, cell_width: 8.0, cell_height: 16.0 };
+        let opts = TermOptions { tmux: true, image_id: Some(7), ..TermOptions::default() };
+        let r = render_for_terminal(config(), geom, &opts);
+        assert!(r.bytes.starts_with(b"\x1bPtmux;\x1b\x1b_Ga=T,U=1,"));
+        let text = String::from_utf8_lossy(&r.bytes);
+        let cells = text.matches(kitty::PLACEHOLDER).count();
+        assert_eq!(cells, usize::from(r.cols) * usize::from(r.rows));
+        assert!(text.contains("\x1b[38;2;0;0;7m"));
+    }
+
+    #[test]
+    fn cell_rows_follow_the_aspect_ratio() {
+        // Bar charts default to aspectRatio 2: 40 cols × 8 px = 320 px wide → 160 px = 10 rows.
+        let r = render_cells_for_terminal(config(), 40, None, CellMode::Auto, None);
+        assert_eq!((r.grid.cols, r.grid.rows), (40, 10));
+        assert!(r.bytes.ends_with(b"\r\n"));
     }
 }
