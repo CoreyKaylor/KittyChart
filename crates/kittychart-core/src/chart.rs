@@ -68,6 +68,8 @@ pub struct DatasetMeta {
     pub points: Vec<Point>,
     pub line: Option<Line>,
     pub arcs: Vec<Arc>,
+    /// The parsed data before decimation (decimation depends on the canvas width).
+    pub parsed_full: Option<Vec<Parsed>>,
     /// Resolved `fill` (filler plugin), for datasets with a line element.
     pub fill: Option<FillSpec>,
     pub bars: Vec<Bar>,
@@ -427,6 +429,7 @@ impl Chart {
                 points: vec![],
                 line: None,
                 arcs: vec![],
+                parsed_full: None,
                 fill: None,
                 bars: vec![],
                 clip: None,
@@ -1075,6 +1078,66 @@ impl Chart {
     fn max_overflow(&self) -> f64 {
         // On the first update the line element has no options yet, so only points count.
         (0..self.metas.len()).map(|m| self.meta_overflow(m, 0.0)).fold(0.0, f64::max)
+    }
+
+    /// Decimation plugin `beforeElementsUpdate`: thin large line datasets to the canvas width.
+    /// Mirrors Chart.js's conditions: enabled, `parsing: false`, line datasets on a linear or
+    /// time x axis with `indexAxis: 'x'`, and more points than the threshold.
+    /// Returns whether any dataset changed, in which case stacks and limits are recomputed.
+    fn apply_decimation(&mut self, width: f64) -> bool {
+        let d = self.plugin_scopes("decimation");
+        let enabled = d.bool_or("enabled", false);
+        let threshold_opt = d.num("threshold").filter(|t| *t > 0.0);
+        let algorithm = d.str("algorithm").unwrap_or("min-max").to_owned();
+        let samples_opt = d.num("samples").filter(|s| *s > 0.0);
+        let parsing_off = self.config.options.get("parsing") == Some(&Value::Bool(false));
+        let mut changed = false;
+        for m in 0..self.metas.len() {
+            if let Some(full) = self.metas[m].parsed_full.take() {
+                self.metas[m].parsed = full; // start from the original data each draw
+                changed = true;
+            }
+            let meta = &self.metas[m];
+            if !enabled || !parsing_off || meta.kind != ChartType::Line || meta.index_axis != Axis::X {
+                continue;
+            }
+            if !matches!(self.scales[meta.x_scale].kind, ScaleKind::Linear | ScaleKind::Time) {
+                continue;
+            }
+            // getStartAndCountOfVisiblePointsSimplified
+            let pts = &meta.parsed;
+            let n = pts.len();
+            if n == 0 {
+                continue;
+            }
+            let (umin, umax, min_def, max_def) = self.scales[meta.x_scale].user_bounds();
+            let xs: Vec<f64> = pts.iter().map(|p| p.x.unwrap_or(f64::NAN)).collect();
+            let lookup = |v: f64| {
+                let (mut lo, mut hi) = (0, n - 1);
+                while hi - lo > 1 {
+                    let mid = (lo + hi) >> 1;
+                    if xs[mid] < v { lo = mid } else { hi = mid }
+                }
+                (lo, hi)
+            };
+            let start = if min_def { lookup(umin).0.min(n - 1) } else { 0 };
+            let count = if max_def { (lookup(umax).1 + 1).clamp(start, n) - start } else { n - start };
+            let threshold = threshold_opt.unwrap_or(4.0 * width);
+            if (count as f64) <= threshold {
+                continue;
+            }
+            let decimated = match algorithm.as_str() {
+                "lttb" => {
+                    let samples = samples_opt.unwrap_or(width) as usize;
+                    crate::decimation::lttb(pts, start, count, samples)
+                }
+                _ => crate::decimation::min_max(pts, start, count, width),
+            };
+            let full = std::mem::replace(&mut self.metas[m].parsed, decimated);
+            self.metas[m].parsed_full = Some(full);
+            changed = true;
+        }
+        changed
     }
 
     /// Filler `afterDatasetsUpdate`: decode each line's `fill`, then resolve dataset targets
@@ -1759,6 +1822,10 @@ impl Chart {
             s.chart_width = self.width;
             s.chart_height = self.height;
             s.dpr = self.dpr;
+        }
+        if self.apply_decimation(self.width) {
+            self.update_stacks();
+            self.determine_data_limits();
         }
         let auto_padding = self.chart_scopes().child("layout").bool_or("autoPadding", true);
         let min_padding = if auto_padding { self.max_overflow() } else { 0.0 };

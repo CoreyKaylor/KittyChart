@@ -87,6 +87,7 @@ pub static DEFAULTS: LazyLock<Value> = LazyLock::new(|| {
         "plugins": {
             "colors": { "enabled": true, "forceOverride": false },
             "filler": { "propagate": true, "drawTime": "beforeDatasetDraw" },
+            "decimation": { "algorithm": "min-max", "enabled": false },
             "title": {
                 "align": "center",
                 "display": false,

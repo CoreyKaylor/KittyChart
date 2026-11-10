@@ -3,10 +3,10 @@
 Chart.js-class charts for graphics-capable terminals (kitty, Ghostty and other libghostty
 terminals, WezTerm, …), from a Rust core with Python, Node and C bindings.
 
-> Status: **M2 in progress**: line, bar, scatter, bubble, pie, doughnut, radar and polar area charts; area fills; category, linear, logarithmic, time, timeseries and radial scales; stacking, floating and horizontal
-> bars, title/subtitle/legend, rendered in the terminal through the kitty graphics protocol.
-> Decimation, tooltips, and fallbacks for non-kitty terminals
-> are next.
+> Status: **M2 complete**: line, bar, scatter, bubble, pie, doughnut, radar and polar area
+> charts; category, linear, logarithmic, time, timeseries and radial scales; stacking, floating
+> and horizontal bars; area fills; decimation; title/subtitle/legend; terminal-native colors.
+> Next (M3): sixel and Unicode fallbacks, tmux, Unicode placeholders, the ratatui widget.
 
 ```sh
 cargo run -p kittychart-cli -- tests/fixtures/line/basic.json          # draw in kitty / Ghostty

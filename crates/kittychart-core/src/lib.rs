@@ -8,6 +8,7 @@ pub mod arc;
 pub mod chart;
 pub mod color;
 pub mod config;
+pub mod decimation;
 pub mod defaults;
 pub mod draw;
 pub mod element;
