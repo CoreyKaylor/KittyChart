@@ -1,0 +1,10 @@
+{
+  "type": "doughnut",
+  "data": {
+    "labels": ["Search", "Direct", "Social", "Email", "Referral"],
+    "datasets": [{ "label": "Visits", "data": [4120, 2630, 1840, 960, 710] }]
+  },
+  "options": {
+    "plugins": { "title": { "display": true, "text": "Where visitors come from" }, "legend": { "position": "right" } }
+  }
+}

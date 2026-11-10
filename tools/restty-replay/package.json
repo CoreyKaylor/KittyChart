@@ -1,0 +1,8 @@
+{
+  "name": "kittychart-restty-replay",
+  "private": true,
+  "description": "Replay recorded KittyChart terminal output into restty (a browser terminal)",
+  "dependencies": {
+    "restty": "0.3.0"
+  }
+}

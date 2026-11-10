@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>KittyChart → restty replay</title>
+<style>
+  :root { color-scheme: dark; --bg: #15161e; --fg: #c0caf5; --dim: #7a83a8; --line: #2a2e42; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  header { padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; }
+  select, button { font: inherit; background: #1f2335; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
+  button:hover { border-color: var(--dim); cursor: pointer; }
+  #status { color: var(--dim); font-size: 13px; }
+  main { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; padding: 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  h2 { font-size: 13px; font-weight: 600; color: var(--dim); margin: 0 0 6px; }
+  #term { width: 100%; height: 640px; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  #ref { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
+  #log { grid-column: 1 / -1; }
+  pre { margin: 0; background: #1a1b26; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; max-height: 220px; overflow: auto; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+  p.note { color: var(--dim); font-size: 13px; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>KittyChart → restty replay</h1>
+  <select id="stream">
+    <option value="inline-kitty">inline: kitty direct placement</option>
+    <option value="inline-placeholders">inline: kitty Unicode placeholders</option>
+    <option value="inline-text">inline: text fallback</option>
+    <option value="view-hover" selected>viewer: hover tooltip</option>
+    <option value="view-legend">viewer: hide dataset (key 1)</option>
+    <option value="ratatui-dashboard">ratatui dashboard: hover</option>
+  </select>
+  <button id="instant">Replay all at once</button>
+  <button id="paced">Replay paced (shows animation)</button>
+  <span id="status">loading restty…</span>
+</header>
+<main>
+  <section>
+    <h2>restty 0.3.0 (browser), fed the recorded bytes through a PTY transport · <span id="grid"></span></h2>
+    <div id="term"></div>
+    <p class="note">Move the pointer over the terminal after a viewer replay: restty's mouse reports appear in the log (the program isn't running, so nothing redraws).</p>
+  </section>
+  <section>
+    <h2>Reference: the same run in kc-preview (libghostty-vt)</h2>
+    <img id="ref" alt="reference screenshot">
+  </section>
+  <section id="log">
+    <h2>Bytes restty sent back to the "PTY" (replies to queries, mouse reports)</h2>
+    <pre id="replies"></pre>
+  </section>
+</main>
+<script type="module">
+import { Restty, getBuiltinTheme } from "./node_modules/restty/dist/restty.esm.js";
+
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $("status").textContent = s; };
+const esc = (s) => s.replace(/[\x00-\x1f\x7f]/g, (c) => c === "\x1b" ? "\\e" : "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0"));
+
+// A PTY transport with no process behind it: output is whatever we push, input is logged.
+let callbacks = null;
+let connected;
+const ready = new Promise((r) => { connected = r; });
+const replies = [];
+window.__replay = { sizes: [] };
+const transport = {
+  connect(opts) { callbacks = opts.callbacks; callbacks.onConnect?.(); connected(); },
+  disconnect() { callbacks?.onDisconnect?.(); callbacks = null; },
+  sendInput(data) {
+    replies.push(data);
+    const pre = $("replies");
+    pre.textContent += esc(data) + "\n";
+    pre.scrollTop = pre.scrollHeight;
+    return true;
+  },
+  resize(cols, rows, meta) { window.__replay.sizes.push({ cols, rows, ...meta }); return true; },
+  isConnected() { return callbacks !== null; },
+};
+
+let fonts;
+try {
+  if ((await fetch("./fonts/mono.ttf", { method: "HEAD" })).ok) fonts = ["./fonts/mono.ttf"];
+} catch {}
+
+const restty = new Restty({
+  root: $("term"),
+  surface: { searchUi: false, shortcuts: false, defaultContextMenu: false, createInitialPane: { focus: true } },
+  terminal: { renderer: "auto", fontSize: 18, theme: getBuiltinTheme("TokyoNight"), ...(fonts ? { fonts } : {}) },
+  services: { ptyTransport: transport },
+});
+restty.connectPty("replay://local");
+await ready;
+
+// The recordings are for a 100x30 terminal. Size the pane so restty's own grid is exactly that
+// (rather than forcing it), from the cell size restty reports.
+const sizes = window.__replay.sizes;
+const until = async (f, ms) => { const t = performance.now(); while (!f() && performance.now() - t < ms) await new Promise((r) => setTimeout(r, 50)); return f(); };
+await until(() => sizes.length > 0, 5000);
+const last = () => sizes[sizes.length - 1];
+if (last()) {
+  const { cols, rows, widthPx, heightPx, cellW, cellH } = last();
+  const box = $("term");
+  // restty reports device pixels; the box is sized in CSS pixels.
+  const ratio = widthPx / cols / cellW > 0 ? widthPx / box.querySelector("canvas").clientWidth : 1;
+  const [cw, ch] = [cellW / ratio, cellH / ratio];
+  const [padW, padH] = [box.offsetWidth - widthPx / ratio, box.offsetHeight - heightPx / ratio];
+  box.style.maxWidth = "none";
+  box.style.width = `${Math.ceil(100 * cw + padW + 0.5)}px`;
+  box.style.height = `${Math.ceil(30 * ch + padH + 0.5)}px`;
+  await until(() => last().cols === 100 && last().rows === 30, 5000);
+}
+const grid = () => { const g = last(); return g ? `grid ${g.cols}×${g.rows}, cell ${g.cellW}×${g.cellH} px` : "grid unknown"; };
+$("grid").textContent = grid();
+
+window.__replay = { done: false, replies, restty, sizes: window.__replay?.sizes ?? [] };
+
+async function replay(paced) {
+  const name = $("stream").value;
+  $("ref").src = `./reference/${name}.png?${Date.now()}`;
+  $("replies").textContent = "";
+  replies.length = 0;
+  window.__replay.done = false;
+  status(`fetching ${name}…`);
+  const bytes = new Uint8Array(await (await fetch(`./streams/${name}.bin`)).arrayBuffer());
+  // Start from a clean terminal: full reset (RIS) also drops kitty images.
+  callbacks.onData("\x1bc");
+  const dec = new TextDecoder();
+  const t0 = performance.now();
+  if (!paced) {
+    callbacks.onData(dec.decode(bytes));
+  } else {
+    // About one chart frame per animation frame.
+    const step = 96 * 1024;
+    for (let i = 0; i < bytes.length; i += step) {
+      callbacks.onData(dec.decode(bytes.subarray(i, i + step), { stream: true }));
+      await new Promise(requestAnimationFrame);
+    }
+    callbacks.onData(dec.decode());
+  }
+  const ms = Math.round(performance.now() - t0);
+  status(`${name}: ${bytes.length.toLocaleString()} bytes in ${ms} ms`);
+  $("grid").textContent = grid();
+  window.__replay.done = true;
+}
+
+$("instant").onclick = () => replay(false);
+$("paced").onclick = () => replay(true);
+$("stream").onchange = () => replay(false);
+status("ready");
+const first = new URLSearchParams(location.search).get("stream");
+if (first) $("stream").value = first;
+replay(false);
+</script>
+</body>
+</html>

@@ -39,6 +39,23 @@ preview *args:
 lint:
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy -p kittychart-wasm --target wasm32-unknown-unknown -- -D warnings
+
+# Build the demo site (canvas + browser terminal, all WebAssembly) and the docs (mdBook, /docs)
+# into target/web. Needs `rustup target add wasm32-unknown-unknown`, the pinned wasm-bindgen-cli
+# (web/build.sh says which) and mdbook (mise install).
+web:
+    web/build.sh
+
+# Build the demo site and serve it on http://127.0.0.1:8766/
+web-serve: web
+    @echo "serving target/web on http://127.0.0.1:8766/ (Ctrl-C to stop)"
+    python3 -m http.server 8766 --bind 127.0.0.1 --directory target/web
+
+# Build the demo site and run its browser smoke test (headless Chromium via playwright-core).
+web-test: web
+    cd tools/reference && npm install --silent --no-audit --no-fund && npx playwright-core install chromium
+    node web/test/smoke.mjs target/web
 
 # Build the Python package into bindings/python/.venv (with the dev tools: pytest, numpy, …).
 python-dev:

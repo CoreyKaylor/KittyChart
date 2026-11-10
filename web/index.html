@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KittyChart: Chart.js charts in your terminal</title>
+<meta name="description" content="A Rust port of Chart.js that draws the same chart into a browser canvas and into a real terminal (kitty graphics, sixel or text). Live demo: both halves run the same WebAssembly.">
+<meta name="kc-repo" content="">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/Inter-Regular.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="style.css">
+<link rel="modulepreload" href="pkg/kittychart_wasm.js">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./" aria-label="KittyChart home">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="17" width="5" height="11" rx="1.2"/><rect x="11" y="10" width="5" height="18" rx="1.2"/><rect x="19" y="14" width="5" height="14" rx="1.2"/><path d="M3 9 L9 5 L15 8 L23 3 L29 6" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>KittyChart</span>
+  </a>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#use">Use it</a>
+    <a href="docs/">Docs</a>
+    <a href="docs/gallery.html">Gallery</a>
+    <a id="gh" href="#" hidden>GitHub</a>
+  </nav>
+</header>
+
+<main>
+<section class="hero">
+  <div class="hero-head">
+  <div>
+  <p class="eyebrow">A Rust port of Chart.js</p>
+  <h1>Chart.js charts, <span class="mono">in&nbsp;your&nbsp;terminal.<span class="cursor" aria-hidden="true"></span></span></h1>
+  </div>
+  <p class="lede">
+    Same config, same library, two outputs. On the left, KittyChart draws into a browser
+    <code>&lt;canvas&gt;</code>. On the right, the very same code runs <code>kittychart view</code>
+    inside a real terminal emulator and speaks kitty graphics escape codes to it.
+    Both halves are this page's WebAssembly. No Chart.js on the page.
+  </p>
+  </div>
+
+  <div class="controls" role="toolbar" aria-label="Demo controls">
+    <div class="tabs" id="presets" role="tablist" aria-label="Chart"></div>
+    <div class="control-group">
+      <button class="btn" id="shuffle" type="button" title="New random data: both views animate to it">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h3l6 8h3M2 12h3l1.6-2.1M9.4 6.1 11 4h3M12 2l2 2-2 2M12 10l2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        New data
+      </button>
+      <div class="seg" id="protocol" role="radiogroup" aria-label="Terminal output">
+        <button type="button" data-p="auto" aria-checked="true" role="radio">kitty</button>
+        <button type="button" data-p="braille" aria-checked="false" role="radio">braille</button>
+        <button type="button" data-p="blocks" aria-checked="false" role="radio">blocks</button>
+        <button type="button" data-p="sixel" aria-checked="false" role="radio" disabled title="restty doesn't support sixel; in foot, xterm or Windows Terminal KittyChart uses it">sixel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <figure class="pane web">
+      <figcaption class="bar">
+        <span class="label"><span class="pill">browser</span> &lt;canvas&gt; · tiny-skia in WebAssembly</span>
+        <span class="stat" id="web-stat"></span>
+      </figcaption>
+      <div class="surface"><canvas id="web" aria-label="Chart drawn into a canvas by KittyChart"></canvas></div>
+      <div class="chips actions" aria-label="Both views">
+        <button type="button" id="replay">replay the animation <kbd>r</kbd></button>
+        <button type="button" id="toggle1">toggle the first series <kbd>1</kbd></button>
+        <span class="chips-note">Chart.js's default colors here; the terminal's theme on the right</span>
+      </div>
+    </figure>
+
+    <aside class="wire" aria-label="Bytes between the program and the terminal">
+      <div class="wire-head"><span>the wire</span><span id="wire-total"></span></div>
+      <ol id="wire" aria-live="off"></ol>
+      <p class="wire-note">↓ to the terminal · ↑ from it</p>
+    </aside>
+
+    <figure class="pane term">
+      <figcaption class="bar">
+        <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="label">~/demo — kittychart</span>
+        <label class="theme"><span class="sr">Terminal theme</span>
+          <select id="theme">
+            <option>TokyoNight</option>
+            <option>Catppuccin Mocha</option>
+            <option>Dracula</option>
+            <option>Gruvbox Dark</option>
+            <option>Nord</option>
+            <option>Catppuccin Latte</option>
+            <option>GitHub Light Default</option>
+          </select>
+        </label>
+      </figcaption>
+      <div class="surface"><div id="term"></div></div>
+      <div class="chips" id="chips" aria-label="Commands to try"></div>
+    </figure>
+  </div>
+  <p class="hint">Hover either chart; the other follows. Click a legend item. Click the terminal, then try <kbd>←</kbd> <kbd>→</kbd> <kbd>1</kbd>–<kbd>9</kbd> <kbd>r</kbd> <kbd>s</kbd> <kbd>q</kbd>.</p>
+
+  <details class="drawer" id="edit">
+    <summary><span class="drawer-title">Change the data. Both animate.</span>
+      <span class="drawer-sub">Edit <code id="edit-file">revenue.json</code> (plain Chart.js JSON) and both views animate to it, the way <code>kittychart view <span id="edit-name">revenue.json</span> --watch</code> follows a file.</span></summary>
+    <div class="editor-box">
+      <div class="editor-bar"><span>config</span><span id="edit-status" class="ok">valid</span></div>
+      <textarea id="editor" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Chart config JSON"></textarea>
+    </div>
+  </details>
+</section>
+
+
+<section class="how" id="how">
+  <div class="section-head">
+    <h2>How it works</h2>
+    <p>One renderer, two ways out. Nothing on the terminal side is special-cased for the browser: it is the CLI's code path, and its output would work unchanged over SSH into kitty, Ghostty or WezTerm.</p>
+  </div>
+  <figure class="diagram">
+    <svg viewBox="0 0 1000 320" role="img" aria-labelledby="dia-t">
+      <title id="dia-t">A Chart.js config goes into KittyChart. Its pixels go to a canvas via putImageData; its escape codes go to the terminal, whose pointer and key reports come back.</title>
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" class="d-arrowhead"/></marker>
+      </defs>
+      <g class="d-box"><rect x="10" y="125" width="180" height="70" rx="10"/><text x="100" y="155">Chart.js config</text><text x="100" y="176" class="d-sub">{ type, data, options }</text></g>
+      <g class="d-box d-core"><rect x="262" y="95" width="300" height="130" rx="12"/><text x="412" y="132">KittyChart · Rust → WebAssembly</text><text x="412" y="158" class="d-sub">layout · scales · elements · tooltips</text><text x="412" y="178" class="d-sub">animation · hit-testing · legend</text><text x="412" y="204" class="d-sub">tiny-skia rasterizer · fonts built in</text></g>
+      <g class="d-box"><rect x="760" y="20" width="230" height="80" rx="10"/><text x="875" y="52">&lt;canvas&gt;</text><text x="875" y="74" class="d-sub">RGBA → putImageData</text></g>
+      <g class="d-box"><rect x="760" y="220" width="230" height="80" rx="10"/><text x="875" y="252">terminal (restty)</text><text x="875" y="274" class="d-sub">kitty graphics · ANSI text</text></g>
+      <path d="M190 160 H260" class="d-line" marker-end="url(#ah)"/>
+      <path d="M562 130 C 650 130, 670 60, 758 60" class="d-line" marker-end="url(#ah)"/>
+      <path d="M562 190 C 650 190, 670 245, 758 245" class="d-line d-amber" marker-end="url(#ah)"/>
+      <path d="M758 285 C 640 285, 620 215, 564 212" class="d-line d-amber d-dash" marker-end="url(#ah)"/>
+      <text x="660" y="80" class="d-tag">pixels</text>
+      <text x="668" y="184" class="d-tag d-amber-t">\e_Ga=T,f=32,…</text>
+      <text x="660" y="306" class="d-tag d-amber-t">\e[&lt;35;x;yM · keys</text>
+    </svg>
+  </figure>
+  <div class="cols">
+    <div><h3>The canvas</h3><p><code>WebChart</code> lays the chart out, rasterizes it with tiny-skia into RGBA in WebAssembly memory, and the page copies those pixels to the canvas. Hover and legend clicks call the same hit-testing the terminal uses.</p></div>
+    <div><h3>The terminal</h3><p>restty is Ghostty's terminal core compiled to WebAssembly. KittyChart asks it what it supports (the same queries as on a real TTY), then <code>Session</code> sends each frame as a kitty graphics image and reads pointer and key reports back through its input parser.</p></div>
+    <div><h3>The wire</h3><p>The column between the panes logs what crosses the terminal boundary: frames going down, pointer and key reports coming up. When you hover the canvas, the page asks KittyChart for the pointer report a terminal would send for the same bar, and feeds it in.</p></div>
+  </div>
+</section>
+
+<section class="use" id="use">
+  <div class="section-head">
+    <h2>Use it</h2>
+    <p>Any Chart.js config. In the terminal it picks kitty graphics, then sixel, then block and Braille text, and takes its colors from your terminal theme. Off the terminal it renders PNG and SVG.</p>
+  </div>
+  <div class="code-tabs" role="tablist" aria-label="Language">
+    <button role="tab" aria-selected="true" data-tab="cli">CLI</button>
+    <button role="tab" aria-selected="false" data-tab="rust">Rust</button>
+    <button role="tab" aria-selected="false" data-tab="python">Python</button>
+    <button role="tab" aria-selected="false" data-tab="node">Node</button>
+    <button role="tab" aria-selected="false" data-tab="c">C</button>
+  </div>
+  <div class="code">
+<pre data-tab="cli"><code><span class="c"># draw in the terminal (kitty → sixel → text)</span>
+kittychart chart.json
+<span class="c"># explore it: hover, legend, keys; follow the file as it changes</span>
+kittychart view chart.json --watch
+<span class="c"># or render files</span>
+kittychart chart.json --out chart.png
+kittychart chart.json --out chart.svg
+cat chart.json | kittychart --protocol braille --cols 80</code></pre>
+<pre data-tab="rust" hidden><code><span class="k">let</span> config = kittychart::ChartConfig::from_json(<span class="s">r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[3,5]}]}}"#</span>)?;
+<span class="c">// draw at the cursor, detecting what the terminal supports</span>
+kittychart::show::show(config.clone(), &amp;Default::default())?;
+<span class="c">// or a PNG</span>
+<span class="k">let</span> png = kittychart::render(config, &amp;kittychart::RenderOptions::new(<span class="n">800.0</span>)).to_png();
+<span class="c">// widgets: kittychart-ratatui (ChartWidget + ChartState)</span></code></pre>
+<pre data-tab="python" hidden><code><span class="k">import</span> kittychart
+
+chart = kittychart.Chart(
+    type=<span class="s">"line"</span>,
+    data={<span class="s">"labels"</span>: [<span class="s">"Mon"</span>, <span class="s">"Tue"</span>, <span class="s">"Wed"</span>], <span class="s">"datasets"</span>: [{<span class="s">"data"</span>: [<span class="n">120</span>, <span class="n">190</span>, <span class="n">170</span>]}]},
+)
+chart.show()                 <span class="c"># draw at the cursor</span>
+chart.interact()             <span class="c"># hover, legend, keys</span>
+chart.save(<span class="s">"chart.png"</span>)       <span class="c"># or .svg; Rich, Textual and IPython too</span></code></pre>
+<pre data-tab="node" hidden><code><span class="k">const</span> fs = require(<span class="s">'fs'</span>)
+<span class="k">const</span> { Chart } = require(<span class="s">'kittychart'</span>)
+
+<span class="k">const</span> chart = <span class="k">new</span> Chart({
+  type: <span class="s">'bar'</span>,
+  data: { labels: [<span class="s">'Q1'</span>, <span class="s">'Q2'</span>, <span class="s">'Q3'</span>], datasets: [{ label: <span class="s">'Revenue'</span>, data: [<span class="n">12</span>, <span class="n">19</span>, <span class="n">7</span>] }] },
+})
+chart.show()                          <span class="c">// draw at the cursor</span>
+fs.writeFileSync(<span class="s">'chart.png'</span>, chart.toPng({ width: <span class="n">800</span> }))</code></pre>
+<pre data-tab="c" hidden><code><span class="k">#include</span> <span class="s">"kittychart.h"</span>
+
+kc_chart *chart = kc_chart_from_json(json);
+<span class="k">if</span> (!chart) { fprintf(stderr, <span class="s">"%s\n"</span>, kc_last_error()); <span class="k">return</span> <span class="n">1</span>; }
+kc_show(chart, NULL);              <span class="c">/* draw in the terminal */</span>
+kc_chart_free(chart);</code></pre>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <p><strong>About this page.</strong> The terminal is <a href="https://github.com/wiedymi/restty">restty</a> 0.3.0, Ghostty's VT core compiled to WebAssembly; there is no server and no PTY, so the prompt is a small JavaScript shell. Every chart it prints, and every frame of <code>kittychart view</code>, is KittyChart's output, byte for byte what the CLI writes. Images travel inside the byte stream, as they would over SSH.</p>
+  <p id="late-note" hidden>¹ restty answers the "primary device attributes" query ahead of the kitty graphics query sent before it, which normal detection reads as "no kitty graphics". So this page keeps listening after it, up to half a second, for the late reply. KittyChart's own detection is unchanged.</p>
+  <p>restty has no sixel, so that path isn't shown here; in foot, xterm, mlterm or Windows Terminal KittyChart draws with sixel, and anywhere else with block and Braille characters.</p>
+</footer>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

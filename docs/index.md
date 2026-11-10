@@ -76,7 +76,7 @@ chart.show()
 
 numpy, pandas and polars data, Python functions as scriptable options, Rich layouts, a Textual
 widget with hover, terminal IPython and Jupyter, and `chart.interact()`. See
-[the Python README](../bindings/python/README.md).
+[the Python README](python.md).
 
 ## Node.js, Bun, Deno
 
@@ -91,7 +91,7 @@ new Chart({ type: 'line', data: { labels: ['a', 'b'], datasets: [{ label: 'x', d
 
 Typed arrays, Dates, JS functions as scriptable options, `chart.interact()`, and typings that
 accept Chart.js's own `ChartConfiguration`. Prebuilt for glibc and musl (Alpine) Linux, macOS
-and Windows. See [the Node README](../bindings/node/README.md).
+and Windows. See [the Node README](node.md).
 
 ## Rust
 

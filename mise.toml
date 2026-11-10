@@ -7,3 +7,4 @@ just = "1.59.0"
 "cargo:cargo-zigbuild" = "0.24.1"                    # `napi build -x` for the musl Node targets
 node = "26.13.0"                                     # tools/reference + bindings/node
 uv = "0.13.7"                                        # bindings/python
+"cargo:mdbook" = "0.5.4"                             # docs/ → the site's /docs (web/build.sh); cargo backend: no aqua linux/arm64 build

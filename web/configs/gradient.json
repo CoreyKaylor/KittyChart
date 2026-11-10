@@ -1,0 +1,19 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10"],
+    "datasets": [{
+      "label": "Active users (k)",
+      "data": [12, 15, 14, 19, 24, 23, 29, 34, 33, 41],
+      "tension": 0.35,
+      "fill": true,
+      "borderColor": "#ff9f40",
+      "pointBackgroundColor": "#ff9f40",
+      "backgroundColor": { "type": "linear", "x0": 0, "y0": "bottom", "x1": 0, "y1": "top", "stops": [[0, "#ff9f4000"], [1, "#ff9f40aa"]] }
+    }]
+  },
+  "options": {
+    "interaction": { "mode": "nearest", "intersect": false },
+    "plugins": { "title": { "display": true, "text": "Growth (gradient fill)" } }
+  }
+}

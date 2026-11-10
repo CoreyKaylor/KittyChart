@@ -1,0 +1,14 @@
+{
+  "type": "radar",
+  "data": {
+    "labels": ["Speed", "Fidelity", "Portability", "Interactivity", "Size", "Docs"],
+    "datasets": [
+      { "label": "v1", "data": [62, 80, 70, 20, 75, 60], "fill": true },
+      { "label": "v2", "data": [78, 92, 88, 85, 72, 74], "fill": true }
+    ]
+  },
+  "options": {
+    "plugins": { "title": { "display": true, "text": "Release scorecard" } },
+    "scales": { "r": { "suggestedMin": 0, "suggestedMax": 100 } }
+  }
+}

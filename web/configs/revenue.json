@@ -1,0 +1,77 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ],
+    "datasets": [
+      {
+        "label": "Revenue ($k)",
+        "data": [
+          38,
+          41,
+          52,
+          49,
+          58,
+          61,
+          57,
+          66,
+          71,
+          69,
+          78,
+          86
+        ],
+        "borderRadius": 4,
+        "order": 1
+      },
+      {
+        "type": "line",
+        "label": "Target",
+        "data": [
+          42,
+          44,
+          47,
+          50,
+          52,
+          55,
+          58,
+          60,
+          63,
+          66,
+          70,
+          74
+        ],
+        "borderDash": [
+          6,
+          4
+        ],
+        "pointRadius": 0,
+        "tension": 0.35,
+        "order": 0
+      }
+    ]
+  },
+  "options": {
+    "interaction": {
+      "mode": "index",
+      "intersect": false
+    },
+    "plugins": {
+      "title": {
+        "display": true,
+        "text": "Revenue vs. target, 2026"
+      }
+    }
+  }
+}

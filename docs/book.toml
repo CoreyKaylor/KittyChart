@@ -1,0 +1,18 @@
+# The docs as an mdBook: the demo site's /docs/ (web/build.sh builds it with the demo).
+# Preview on its own: `mdbook serve docs` (mdBook is pinned in mise.toml).
+[book]
+title = "KittyChart"
+description = "Chart.js-compatible charts for terminals, from Rust, Python, Node and C"
+authors = ["Corey Kaylor"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "../target/docs-book"
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+additional-css = ["theme/kittychart.css"]
+no-section-label = true

@@ -1,0 +1,8 @@
+{
+  "name": "kittychart-demo-site",
+  "private": true,
+  "description": "The KittyChart demo site (GitHub Pages): build with web/build.sh",
+  "dependencies": {
+    "restty": "0.3.0"
+  }
+}

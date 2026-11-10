@@ -1423,6 +1423,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kittychart-wasm"
+version = "0.0.1"
+dependencies = [
+ "kittychart",
+ "kittychart-core",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

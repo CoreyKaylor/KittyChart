@@ -1,0 +1,55 @@
+/* The demo site's look for the docs: Inter and JetBrains Mono (served by the site at /fonts),
+   and its amber accent. Without those fonts (plain `mdbook serve docs`) the system ones apply. */
+@font-face { font-family: "Inter KC"; src: url("../../fonts/Inter-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Inter KC"; src: url("../../fonts/Inter-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "JetBrains Mono KC"; src: url("../../fonts/JetBrainsMono-Regular.ttf") format("truetype"); font-display: swap; }
+
+:root {
+  --mono-font: "JetBrains Mono KC", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+html { font-family: "Inter KC", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+code, pre { font-family: var(--mono-font) !important; }
+.content main { max-width: 860px; }
+.content img { max-width: 100%; border-radius: 6px; }
+
+.light, .rust {
+  --links: #a35f00;
+  --sidebar-active: #a35f00;
+  --inline-code-color: #3b3d45;
+}
+.navy, .coal, .ayu {
+  --bg: #08090d;
+  --fg: #e3e4ea;
+  --sidebar-bg: #0f1118;
+  --sidebar-fg: #c8cbd6;
+  --sidebar-non-existant: #636a80;
+  --sidebar-active: #ffb547;
+  --sidebar-spacer: #222736;
+  --links: #ffb547;
+  --inline-code-color: #e9eaf0;
+  --theme-popup-bg: #12141c;
+  --theme-popup-border: #30364a;
+  --theme-hover: #1a1d29;
+  --quote-bg: #12141c;
+  --quote-border: #30364a;
+  --table-border-color: #222736;
+  --table-header-bg: #151823;
+  --table-alternate-bg: #0d0f15;
+  --searchbar-bg: #12141c;
+  --searchbar-fg: #e3e4ea;
+  --searchbar-border-color: #30364a;
+  --searchresults-header-fg: #9aa0b4;
+  --searchresults-border-color: #30364a;
+  --searchresults-li-bg: #12141c;
+  --search-mark-bg: #ffb547;
+  --icons: #9aa0b4;
+  --icons-hover: #ffb547;
+}
+.navy pre, .navy code.hljs, .navy .hljs { background: #12141c; }
+
+/* The way back to the demo, added to the top of the overview by web/docs.sh. */
+.kc-demo-link { display: inline-block; margin: 0 0 1em; font: 600 0.9em var(--mono-font); text-decoration: none; }
+
+/* Gallery headings are links to their fixture's JSON; mdBook's sidebar heading list drops the
+   link text and would show empty rows. List only the categories there. */
+.sidebar li.header-item:has(> .chapter-link-wrapper > a:empty) { display: none; }

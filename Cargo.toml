@@ -12,6 +12,7 @@ default-members = [
     "crates/kittychart-cli",
     "crates/kittychart-ratatui",
     "crates/kittychart-ffi",
+    "crates/kittychart-wasm",
 ]
 
 [workspace.package]

@@ -20,11 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with: { components: "rustfmt, clippy" }
+        with: { components: "rustfmt, clippy", targets: wasm32-unknown-unknown }
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       # Default members only: clippy on the conformance crate would need Zig.
       - run: cargo clippy --all-targets -- -D warnings
+      # The demo site's WebAssembly build (web/build.sh).
+      - run: cargo clippy -p kittychart-wasm --target wasm32-unknown-unknown -- -D warnings
 
   # L0–L2: unit, goldens, protocol. Pure Rust, every OS. Goldens use the DSSIM tolerance, so
   # anti-aliasing differences between architectures don't fail the build.

@@ -1,0 +1,15 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["00:00", "02:00", "04:00", "06:00", "08:00", "10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"],
+    "datasets": [
+      { "label": "p50 ms", "data": [21, 19, 18, 22, 35, 41, 38, 44, 40, 33, 27, 23], "tension": 0.4, "fill": true },
+      { "label": "p99 ms", "data": [64, 58, 55, 70, 118, 142, 131, 156, 139, 104, 82, 69], "tension": 0.4 }
+    ]
+  },
+  "options": {
+    "interaction": { "mode": "index", "intersect": false },
+    "plugins": { "title": { "display": true, "text": "API latency, last 24 h" } },
+    "scales": { "y": { "beginAtZero": true } }
+  }
+}
