@@ -1,0 +1,58 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# kittychart-conformance and kittychart-preview need Zig (libghostty-vt). Keep them out of plain
+# `cargo build/test`. Run them with `just test-all`, `just preview`, or `-p <crate>`.
+default-members = [
+    "crates/kittychart-canvas",
+    "crates/kittychart-term",
+    "crates/kittychart-testkit",
+    "crates/kittychart-core",
+    "crates/kittychart",
+    "crates/kittychart-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+authors = ["Corey Kaylor <corey@kaylors.net>"]
+
+[workspace.dependencies]
+kittychart-canvas = { path = "crates/kittychart-canvas" }
+kittychart-term = { path = "crates/kittychart-term" }
+kittychart-testkit = { path = "crates/kittychart-testkit" }
+kittychart-core = { path = "crates/kittychart-core" }
+kittychart = { path = "crates/kittychart" }
+
+tiny-skia = "0.12.0"
+cosmic-text = { version = "0.19.0", default-features = false, features = ["std"] }
+flate2 = "1.1.11"
+base64 = "0.23.1"
+png = "0.18.1"
+thiserror = "2.0.21"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+csscolorparser = "0.9.0"
+vte = "0.15.0"
+
+# test-only
+insta = "1.49.0"
+proptest = "1.12.0"
+datatest-stable = "0.3.3"
+dssim-core = "3.5.1"
+libghostty-vt = "=0.2.2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev.package."*"]
+opt-level = 2   # fast rasterization/zlib in tests while keeping our code debuggable
+
+[profile.test.package."*"]
+opt-level = 2

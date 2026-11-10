@@ -1,0 +1,15 @@
+{
+  "_kc": { "width": 600, "height": 320 },
+  "type": "bar",
+  "data": {
+    "labels": ["Rust", "Python", "TypeScript", "Go", "Zig"],
+    "datasets": [
+      { "label": "Stars (k)", "data": [98, 61, 102, 123, 37], "borderWidth": 2, "borderRadius": 6, "borderSkipped": false }
+    ]
+  },
+  "options": {
+    "indexAxis": "y",
+    "plugins": { "legend": { "position": "right" } },
+    "scales": { "x": { "title": { "display": true, "text": "GitHub stars (thousands)" } } }
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "kittychart-testkit"
+description = "Test support for KittyChart: protocol decoders and golden-image comparison"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+flate2 = { workspace = true }
+png = { workspace = true }
+dssim-core = { workspace = true }
+rgb = "0.8"
+
+[lints]
+workspace = true

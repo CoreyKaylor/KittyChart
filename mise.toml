@@ -1,0 +1,8 @@
+# Pinned dev toolchain. `mise install` sets up everything needed for `just test-all`.
+[tools]
+zig = "0.15.2"                                       # only for crates/kittychart-conformance (libghostty-vt)
+just = "1.59.0"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.151"
+"cargo:cargo-insta" = "1.49.0"                       # cargo backend: no prebuilt linux/arm64 binary
+node = "26.13.0"                                     # tools/reference + bindings/node
+uv = "0.13.7"                                        # bindings/python

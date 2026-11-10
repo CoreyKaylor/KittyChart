@@ -1,0 +1,26 @@
+name: Chart.js parity
+
+# L4: renders every fixture with real Chart.js in headless Chromium and with KittyChart, then
+# publishes a side-by-side DSSIM report. It tracks fidelity and isn't a merge gate.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: "node just"
+      - uses: Swatinem/rust-cache@v2
+      - run: cd tools/reference && npm ci && npx playwright-core install --with-deps chromium
+      - run: mkdir -p target && just parity | tee target/parity-summary.txt
+      - run: cat target/parity-summary.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-report
+          path: target/parity/

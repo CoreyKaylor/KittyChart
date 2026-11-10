@@ -1,0 +1,10 @@
+{
+  "_kc": { "width": 500, "height": 260 },
+  "type": "bar",
+  "data": {
+    "labels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+    "datasets": [
+      { "label": "Temperature range °C", "data": [[-3, 5], [2, 10], [-1, 8], [4, 14], [6, 12]], "backgroundColor": "rgba(255, 159, 64, 0.6)", "borderColor": "rgb(255, 159, 64)", "borderWidth": 1 }
+    ]
+  }
+}

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: "rustfmt, clippy" }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      # Default members only: clippy on the conformance crate would need Zig.
+      - run: cargo clippy --all-targets -- -D warnings
+
+  # L0–L2: unit, goldens, protocol. Pure Rust, every OS. Goldens use the DSSIM tolerance, so
+  # anti-aliasing differences between architectures don't fail the build.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-nextest }
+      - run: cargo nextest run --profile ci
+      - name: Upload golden diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kc-diffs-${{ matrix.os }}
+          path: target/kc-diffs/
+          if-no-files-found: ignore
+
+  # L3: Ghostty's real VT core, in-process. Zig comes from mise.toml. The built libghostty-vt
+  # is cached in target/ by rust-cache, keyed on Cargo.lock, which pins the Ghostty commit
+  # through libghostty-vt-sys.
+  conformance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: "zig aqua:nextest-rs/nextest/cargo-nextest"
+      - uses: Swatinem/rust-cache@v2
+        with: { key: libghostty }
+      - run: cargo clippy -p kittychart-conformance --all-targets -- -D warnings
+      - run: cargo nextest run --profile ci -p kittychart-conformance

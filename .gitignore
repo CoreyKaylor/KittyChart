@@ -1,0 +1,4 @@
+/target
+*.new.png
+*.pending-snap
+node_modules/

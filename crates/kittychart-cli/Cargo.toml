@@ -1,0 +1,21 @@
+[package]
+name = "kittychart-cli"
+description = "Render Chart.js configs in your terminal (kitty graphics protocol) or to PNG"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "kittychart"
+path = "src/main.rs"
+
+[dependencies]
+kittychart = { workspace = true }
+kittychart-core = { workspace = true }
+kittychart-term = { workspace = true }
+clap = { version = "4.5", features = ["derive"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "kittychart-conformance"
+description = "Dev-only: verifies KittyChart output against Ghostty's real VT core (libghostty-vt)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+libghostty-vt = { workspace = true }
+kittychart-term = { workspace = true }
+kittychart-testkit = { workspace = true }
+
+[lints]
+workspace = true

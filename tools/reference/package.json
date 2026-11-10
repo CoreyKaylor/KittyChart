@@ -1,0 +1,10 @@
+{
+  "name": "kittychart-reference",
+  "private": true,
+  "description": "Renders KittyChart fixtures with real Chart.js in headless Chromium for parity reports",
+  "type": "module",
+  "dependencies": {
+    "chart.js": "4.6.1",
+    "playwright-core": "1.65.0"
+  }
+}

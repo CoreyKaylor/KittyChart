@@ -1,0 +1,13 @@
+{
+  "_kc": { "width": 600, "height": 300 },
+  "type": "line",
+  "data": {
+    "labels": ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+    "datasets": [
+      { "label": "stepped", "data": [10, 30, 25, 50, 45, 70, 60, 85, 80], "stepped": true, "pointStyle": "rect", "pointRadius": 5 },
+      { "label": "monotone", "data": [5, 12, 40, 41, 42, 20, 22, 60, 64], "cubicInterpolationMode": "monotone", "pointStyle": "triangle", "pointRadius": 6, "borderDash": [6, 4] },
+      { "label": "gap", "data": [60, 62, null, 55, 50, null, null, 30, 35], "pointStyle": "rectRot", "pointRadius": 5, "borderWidth": 2 }
+    ]
+  },
+  "options": { "plugins": { "legend": { "position": "bottom", "labels": { "usePointStyle": true } } } }
+}

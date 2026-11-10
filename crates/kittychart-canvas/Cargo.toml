@@ -1,0 +1,19 @@
+[package]
+name = "kittychart-canvas"
+description = "Canvas2D-shaped drawing API for KittyChart with a pure-Rust tiny-skia raster backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+include = ["src/**/*", "fonts/**/*", "Cargo.toml"]
+
+[dependencies]
+tiny-skia = { workspace = true, default-features = false, features = ["std", "simd"] }
+cosmic-text = { workspace = true }
+
+[dev-dependencies]
+kittychart-testkit = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+{
+  "_kc": { "width": 480, "height": 240, "dpr": 2 },
+  "type": "bar",
+  "data": {
+    "labels": ["Q1", "Q2", "Q3", "Q4"],
+    "datasets": [
+      { "type": "line", "label": "Target", "data": [50, 55, 60, 65], "borderColor": "rgb(255, 99, 132)", "backgroundColor": "rgba(255, 99, 132, 0.5)", "tension": 0.3 },
+      { "label": "Revenue", "data": [42, 61, 58, 71], "backgroundColor": "rgba(54, 162, 235, 0.5)", "borderColor": "rgb(54, 162, 235)", "borderWidth": 2 }
+    ]
+  },
+  "options": { "plugins": { "legend": { "position": "bottom" } } }
+}

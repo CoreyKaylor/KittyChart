@@ -1,0 +1,9 @@
+---
+source: crates/kittychart-term/tests/kitty_protocol.rs
+expression: describe(&out)
+---
+APC G a=T,f=32,s=64,v=48,i=42,p=3,c=8,r=3,C=1,q=1,m=1 ; <4096 bytes>
+APC G m=1,q=1 ; <4096 bytes>
+APC G m=1,q=1 ; <4096 bytes>
+APC G m=0,q=1 ; <4096 bytes>
+APC G a=d,d=I,i=42,q=2 ; <0 bytes>

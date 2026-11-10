@@ -1,0 +1,21 @@
+{
+  "_kc": { "width": 640, "height": 320 },
+  "type": "line",
+  "data": {
+    "labels": ["Monday morning", "Tuesday afternoon", "Wednesday evening", "Thursday night", "Friday dawn", "Saturday noon", "Sunday midnight"],
+    "datasets": [
+      { "label": "Requests/s", "data": [1200, 1900, 3000, 5000, 2300, 3200, 12500], "fill": false },
+      { "label": "Hidden", "data": [1, 2, 3, 4, 5, 6, 7], "hidden": true }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "Throughput", "font": { "size": 18 } },
+      "subtitle": { "display": true, "text": "Rotated labels, scale titles, grouped thousands" }
+    },
+    "scales": {
+      "x": { "title": { "display": true, "text": "Time" } },
+      "y": { "title": { "display": true, "text": "req/s" }, "beginAtZero": true, "grid": { "color": "rgba(54, 162, 235, 0.2)" } }
+    }
+  }
+}
