@@ -6,23 +6,109 @@
 //! override `font.size` and still inherit `font.family`. [`Scopes`] implements that model over
 //! `serde_json::Value`. Chart code converts the results into typed structs once per update.
 
+use std::fmt;
+use std::rc::Rc;
+
+use elsa::FrozenVec;
 use kittychart_canvas::Color;
 use serde_json::Value;
 
 use crate::color;
+use crate::script::{self, Script};
+
+/// The context scriptable options are called with (see [`crate::script`]): a base object (the
+/// chart, dataset or scale context) plus, for indexable options, fields that depend on the
+/// element index (`dataIndex`, `raw`, `parsed` … or `tick`).
+pub struct ScriptCtx<'a> {
+    pub script: Script,
+    pub base: Value,
+    pub per_index: Option<Box<dyn Fn(usize) -> Value + 'a>>,
+}
+
+impl fmt::Debug for ScriptCtx<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScriptCtx")
+            .field("base", &self.base)
+            .field("per_index", &self.per_index.is_some())
+            .finish()
+    }
+}
+
+impl ScriptCtx<'_> {
+    /// The context object for an option read at `index`.
+    pub fn context(&self, index: Option<usize>) -> Value {
+        let mut ctx = self.base.clone();
+        if let (Some(i), Some(f), Value::Object(o)) = (index, &self.per_index, &mut ctx)
+            && let Value::Object(extra) = f(i)
+        {
+            o.extend(extra);
+        }
+        ctx
+    }
+}
+
+/// A scope object: borrowed from the configuration, or produced by a scriptable function.
+#[derive(Clone)]
+enum Src<'a> {
+    Borrowed(&'a Value),
+    Owned(Rc<Value>),
+}
+
+impl Src<'_> {
+    fn value(&self) -> &Value {
+        match self {
+            Src::Borrowed(v) => v,
+            Src::Owned(v) => v,
+        }
+    }
+}
 
 /// An ordered list of JSON objects searched first to last.
-#[derive(Debug, Clone, Default)]
+///
+/// Values come back borrowed from the `Scopes` (not the configuration), because a scriptable
+/// option's value is computed on demand; computed values live as long as the `Scopes`.
 pub struct Scopes<'a> {
-    scopes: Vec<&'a Value>,
+    scopes: Vec<Src<'a>>,
     /// Option-name prefixes tried in order, such as `["point", ""]` so a line dataset's
     /// `pointRadius` feeds the point element's `radius`.
     prefixes: Vec<String>,
+    ctx: Option<Rc<ScriptCtx<'a>>>,
+    computed: FrozenVec<Box<Value>>,
+}
+
+impl Clone for Scopes<'_> {
+    fn clone(&self) -> Self {
+        Scopes {
+            scopes: self.scopes.clone(),
+            prefixes: self.prefixes.clone(),
+            ctx: self.ctx.clone(),
+            computed: FrozenVec::new(),
+        }
+    }
+}
+
+impl Default for Scopes<'_> {
+    fn default() -> Self {
+        Scopes { scopes: Vec::new(), prefixes: vec![String::new()], ctx: None, computed: FrozenVec::new() }
+    }
+}
+
+impl fmt::Debug for Scopes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Scopes")
+            .field("scopes", &self.scopes.iter().map(Src::value).collect::<Vec<_>>())
+            .field("prefixes", &self.prefixes)
+            .field("scriptable", &self.ctx.is_some())
+            .finish()
+    }
 }
 
 impl<'a> Scopes<'a> {
     pub fn new(scopes: impl IntoIterator<Item = &'a Value>) -> Self {
-        Self { scopes: scopes.into_iter().filter(|v| v.is_object()).collect(), prefixes: vec![String::new()] }
+        Scopes {
+            scopes: scopes.into_iter().filter(|v| v.is_object()).map(Src::Borrowed).collect(),
+            ..Scopes::default()
+        }
     }
 
     pub fn with_prefixes(mut self, prefixes: &[&str]) -> Self {
@@ -30,46 +116,104 @@ impl<'a> Scopes<'a> {
         self
     }
 
-    /// The scope objects, in priority order (to chain one resolver after another).
-    pub fn raw(&self) -> Vec<&'a Value> {
-        self.scopes.clone()
+    /// Resolve function markers through `ctx` (see [`crate::script`]).
+    pub fn with_script(mut self, ctx: Option<Rc<ScriptCtx<'a>>>) -> Self {
+        self.ctx = ctx;
+        self
     }
 
     /// Append lower-priority scopes, for example a route such as `{"color": <chart color>}`.
     pub fn then(mut self, more: impl IntoIterator<Item = &'a Value>) -> Self {
-        self.scopes.extend(more.into_iter().filter(|v| v.is_object()));
+        self.scopes.extend(more.into_iter().filter(|v| v.is_object()).map(Src::Borrowed));
         self
     }
 
-    /// Resolve a key: for each prefix, the first scope that defines `prefix + Key`. JSON `null`
-    /// counts as defined, as in Chart.js, where only `undefined` falls through.
-    pub fn get(&self, key: &str) -> Option<&'a Value> {
+    /// Append another resolver's scopes (lower priority).
+    pub fn then_scopes(mut self, more: &Scopes<'a>) -> Self {
+        self.scopes.extend(more.scopes.iter().cloned());
+        self
+    }
+
+    /// Call the function behind a marker; `None` when it isn't a marker's or yields undefined.
+    fn call(&self, id: &str, index: Option<usize>) -> Option<Value> {
+        let ctx = self.ctx.as_ref()?;
+        ctx.script.call(id, &ctx.context(index))
+    }
+
+    /// Resolve `key` (with prefixes) to the first defined value, calling functions with
+    /// `index` in their context. JSON `null` counts as defined, as in Chart.js, where only
+    /// `undefined` falls through; a function returning undefined falls through.
+    fn find(&self, key: &str, index: Option<usize>) -> Option<&Value> {
         for prefix in &self.prefixes {
             let k = read_key(prefix, key);
             for s in &self.scopes {
-                if let Some(v) = s.get(&k) {
-                    return Some(v);
+                let Some(v) = s.value().get(&k) else { continue };
+                match script::fn_id(v) {
+                    None => return Some(v),
+                    Some(id) => {
+                        if let Some(r) = self.call(&id, index) {
+                            return Some(self.computed.push_get(Box::new(r)));
+                        }
+                    }
                 }
             }
         }
         None
     }
 
+    /// The function id behind `key`, if its first definition is a function marker (for
+    /// callbacks with their own calling convention, such as `ticks.callback`).
+    pub fn fn_id(&self, key: &str) -> Option<String> {
+        self.ctx.as_ref()?;
+        for prefix in &self.prefixes {
+            let k = read_key(prefix, key);
+            if let Some(v) = self.scopes.iter().find_map(|s| s.value().get(&k)) {
+                return script::fn_id(v);
+            }
+        }
+        None
+    }
+
+    /// The script these scopes resolve functions with.
+    pub fn script(&self) -> Option<&Script> {
+        self.ctx.as_ref().map(|c| &c.script)
+    }
+
+    /// Resolve a key: for each prefix, the first scope that defines `prefix + Key`.
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.find(key, None)
+    }
+
     /// The scopes of a nested object option, merged key by key (Chart.js sub-resolver).
-    /// Prefixes don't carry into sub-objects.
+    /// Prefixes don't carry into sub-objects. A function returning an object contributes it.
     pub fn child(&self, key: &str) -> Scopes<'a> {
         let mut scopes = Vec::new();
         for prefix in &self.prefixes {
             let k = read_key(prefix, key);
-            scopes.extend(self.scopes.iter().filter_map(|s| s.get(&k)).filter(|v| v.is_object()));
+            for s in &self.scopes {
+                let found = match s {
+                    Src::Borrowed(v) => v.get(&k).map(Src::Borrowed),
+                    Src::Owned(v) => v.get(&k).map(|c| Src::Owned(Rc::new(c.clone()))),
+                };
+                let Some(found) = found else { continue };
+                match script::fn_id(found.value()) {
+                    Some(id) => {
+                        if let Some(r) = self.call(&id, None).filter(Value::is_object) {
+                            scopes.push(Src::Owned(Rc::new(r)));
+                        }
+                    }
+                    None if found.value().is_object() => scopes.push(found),
+                    None => {}
+                }
+            }
         }
-        Scopes { scopes, prefixes: vec![String::new()] }
+        Scopes { scopes, prefixes: vec![String::new()], ctx: self.ctx.clone(), computed: FrozenVec::new() }
     }
 
     /// Like [`Scopes::get`], with indexable-option semantics: an array value yields
-    /// `array[index % len]`.
-    pub fn get_at(&self, key: &str, index: Option<usize>) -> Option<&'a Value> {
-        let v = self.get(key)?;
+    /// `array[index % len]`, and functions see `index` in their context.
+    pub fn get_at(&self, key: &str, index: Option<usize>) -> Option<&Value> {
+        let v = self.find(key, index)?;
         match (v, index) {
             (Value::Array(a), Some(i)) if !a.is_empty() => Some(&a[i % a.len()]),
             _ => Some(v),
@@ -88,7 +232,7 @@ impl<'a> Scopes<'a> {
     pub fn bool_or(&self, key: &str, default: bool) -> bool {
         self.get(key).and_then(Value::as_bool).unwrap_or(default)
     }
-    pub fn str(&self, key: &str) -> Option<&'a str> {
+    pub fn str(&self, key: &str) -> Option<&str> {
         self.get(key).and_then(Value::as_str)
     }
     pub fn color_at(&self, key: &str, i: Option<usize>) -> Option<Color> {
@@ -100,6 +244,10 @@ impl<'a> Scopes<'a> {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(as_num).collect())
             .unwrap_or_default()
+    }
+    /// No scope objects at all (e.g. an unset nested option).
+    pub fn is_empty(&self) -> bool {
+        self.scopes.is_empty()
     }
     pub fn is_defined(&self, key: &str) -> bool {
         self.get(key).is_some_and(|v| !v.is_null())

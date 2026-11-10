@@ -20,6 +20,7 @@ const chart = new Chart({
 chart.show()                                    // draw at the cursor
 fs.writeFileSync('chart.png', chart.toPng({ width: 800, scale: 2 }))
 console.log(chart.toText({ cols: 60 }))         // block/Braille text with ANSI colors
+fs.writeFileSync('chart.svg', chart.toSvg())    // SVG, text as outlines
 ```
 
 Any Chart.js configuration works, and the typings accept Chart.js's own `ChartConfiguration`

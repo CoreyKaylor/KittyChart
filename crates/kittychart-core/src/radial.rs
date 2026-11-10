@@ -95,7 +95,7 @@ impl RadialScale {
         let o = self.opts();
         let mut s = o.child("angleLines");
         s = s.then([&self.routes["angleLines"]]);
-        s.then(o.child("grid").raw())
+        s.then_scopes(&o.child("grid"))
     }
     fn point_label_opts(&self) -> Scopes<'_> {
         self.opts().child("pointLabels").then([&self.routes["pointLabels"]])
@@ -228,6 +228,7 @@ impl RadialScale {
             include_bounds: t.get("includeBounds").and_then(Value::as_bool) != Some(false),
         };
         let values = generate_ticks(&tg, self.range.0, self.range.1);
+        drop(t);
         if tg.bounds_ticks {
             for v in &values {
                 self.min = self.min.min(*v);
@@ -286,6 +287,7 @@ impl RadialScale {
         let font = self.font_of(&pl);
         let padding = pl.num_or("padding", 5.0);
         let auto = pl.str("display") == Some("auto");
+        drop(pl);
         let mut sizes = Vec::with_capacity(n);
         c.save();
         c.set_font(font.to_canvas());

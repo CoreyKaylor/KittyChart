@@ -126,6 +126,8 @@ export class Chart {
   /** Merge changes into the configuration; `data` replaces the data. */
   update(patch: Partial<ChartConfiguration>): this
   toPng(opts?: RenderOptions): Buffer
+  /** An SVG document of the same chart (text as outlines, no fonts needed). */
+  toSvg(opts?: RenderOptions): string
   toRgba(opts?: RenderOptions): { width: number; height: number; data: Buffer }
   toText(opts?: TextOptions): string
   /** Draw at the cursor with the best protocol the terminal supports. */

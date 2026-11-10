@@ -11,6 +11,17 @@ use crate::{
     TextMetrics,
 };
 
+/// Stroke parameters in device space.
+#[derive(Debug, Clone)]
+pub(crate) struct DeviceStroke {
+    pub width: f32,
+    pub dash: Vec<f32>,
+    pub dash_offset: f32,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    pub miter_limit: f32,
+}
+
 #[derive(Clone)]
 struct State {
     transform: sk::Transform,
@@ -216,6 +227,40 @@ impl SkiaCanvas {
             sk::Transform::identity(),
             self.state.clip.as_ref(),
         );
+    }
+
+    /// The current path in device space (for other backends that reuse this one's geometry).
+    pub(crate) fn device_path(&self) -> Option<sk::Path> {
+        self.current_path()
+    }
+
+    /// Text outlines in device space.
+    pub(crate) fn device_text_path(
+        &self,
+        text: &str,
+        x: f32,
+        y: f32,
+        max_width: Option<f32>,
+    ) -> Option<sk::Path> {
+        self.text_path(text, x, y, max_width)
+    }
+
+    /// The stroke in device space: width, dash and dash offset scaled by the transform.
+    pub(crate) fn device_stroke(&self) -> DeviceStroke {
+        let t = self.state.transform;
+        let s = ((t.sx * t.sx + t.ky * t.ky).sqrt() + (t.kx * t.kx + t.sy * t.sy).sqrt()) / 2.0;
+        DeviceStroke {
+            width: self.state.line_width * s,
+            dash: if self.state.dash.iter().any(|d| *d > 0.0) {
+                self.state.dash.iter().map(|d| d * s).collect()
+            } else {
+                Vec::new()
+            },
+            dash_offset: self.state.dash_offset * s,
+            cap: self.state.cap,
+            join: self.state.join,
+            miter_limit: self.state.miter_limit,
+        }
     }
 
     fn device_point(&self, x: f32, y: f32) -> (f32, f32) {

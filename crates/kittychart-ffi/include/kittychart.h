@@ -94,6 +94,15 @@ int kc_render_png(const struct kc_chart *chart,
                   const struct kc_render_options *opts,
                   struct kc_bytes *out);
 
+// Render to an SVG document (NUL-terminated UTF-8). Text is drawn as outlines, so the SVG
+// needs no fonts.
+//
+// # Safety
+// `chart` is valid; `opts` is NULL or valid; `out` is valid for writes.
+int kc_render_svg(const struct kc_chart *chart,
+                  const struct kc_render_options *opts,
+                  struct kc_bytes *out);
+
 // Render to raw RGBA pixels.
 //
 // # Safety

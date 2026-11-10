@@ -55,6 +55,14 @@ def test_png_and_rgba_sizes():
     assert png[:4] == b"\x89PNG" and decode_png(png)[:2] == (300, 300)
 
 
+def test_svg(tmp_path):
+    c = kittychart.Chart(BAR)
+    svg = c.to_svg(400)
+    assert svg.startswith('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"')
+    c.save(tmp_path / "c.svg", width=300)
+    assert (tmp_path / "c.svg").read_text().startswith("<svg")
+
+
 def test_save(tmp_path):
     p = tmp_path / "c.png"
     kittychart.Chart(BAR).save(p, width=200)

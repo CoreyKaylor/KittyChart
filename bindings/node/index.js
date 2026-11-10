@@ -76,6 +76,11 @@ class Chart {
     return native.renderPng(this.#json, opts)
   }
 
+  /** An SVG document of the same chart (text as outlines, no fonts needed). */
+  toSvg(opts) {
+    return native.renderSvg(this.#json, opts)
+  }
+
   /** `{ width, height, data }`: non-premultiplied RGBA8 pixels. */
   toRgba(opts) {
     return native.renderRgba(this.#json, opts)

@@ -1,0 +1,19 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["A", "B", "C", "D"],
+    "datasets": [{
+      "label": "Radial",
+      "data": [8, 14, 6, 11],
+      "backgroundColor": { "type": "radial", "x0": "centerX", "y0": "bottom", "r0": 0,
+                           "x1": "centerX", "y1": "bottom", "r1": 260,
+                           "stops": [[0, "#ffcd56"], [0.6, "#ff9f40"], [1, "#ff6384"]] }
+    }, {
+      "label": "Conic",
+      "data": [5, 9, 12, 4],
+      "backgroundColor": { "type": "conic", "angle": 0, "x": "centerX", "y": "centerY",
+                           "stops": [[0, "#4bc0c0"], [0.5, "#9966ff"], [1, "#4bc0c0"]] }
+    }]
+  },
+  "_kc": { "width": 512, "height": 256 }
+}

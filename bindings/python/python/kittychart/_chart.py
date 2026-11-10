@@ -270,8 +270,24 @@ class Chart:
         ``scale`` is the device pixel ratio."""
         return _native.render_png(self._json, float(width), _f(height), float(scale), background)
 
+    def to_svg(
+        self,
+        width: float = 800,
+        height: Optional[float] = None,
+        *,
+        scale: float = 1.0,
+        background: Optional[str] = None,
+    ) -> str:
+        """An SVG document of the same chart. Text is drawn as outlines (no fonts needed)."""
+        return _native.render_svg(self._json, float(width), _f(height), float(scale), background)
+
     def save(self, path: Union[str, os.PathLike], **kwargs: Any) -> None:
-        """Write a PNG file (see :meth:`to_png` for options)."""
+        """Write a PNG file, or an SVG file when the name ends in ``.svg`` (see
+        :meth:`to_png` for options)."""
+        if str(path).lower().endswith(".svg"):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.to_svg(**kwargs))
+            return
         with open(path, "wb") as f:
             f.write(self.to_png(**kwargs))
 

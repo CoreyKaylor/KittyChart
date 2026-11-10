@@ -83,6 +83,11 @@ for (const name of ['bar/grouped', 'line/basic', 'arc/pie']) {
   })
 }
 
+test('SVG', () => {
+  const svg = new Chart(BAR).toSvg({ width: 400 })
+  assert.ok(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"'))
+})
+
 test('typed arrays, NaN, BigInt and Dates become Chart.js JSON', () => {
   const c = new Chart({
     type: 'line',

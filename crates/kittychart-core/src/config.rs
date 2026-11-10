@@ -85,6 +85,9 @@ pub struct ChartConfig {
     pub chart_type: ChartType,
     pub data: Value,
     pub options: Value,
+    /// Calls the functions behind scriptable options (`{"__kc_fn": id}` markers). See
+    /// [`crate::script`].
+    pub script: Option<crate::script::Script>,
 }
 
 impl ChartConfig {
@@ -125,7 +128,28 @@ impl ChartConfig {
                 Some(_) => return Err(ConfigError::BadData(i)),
             }
         }
-        Ok(Self { chart_type, data, options })
+        Ok(Self { chart_type, data, options, script: None })
+    }
+
+    /// Register a Rust function for scriptable options: wherever the config holds the marker
+    /// `{"__kc_fn": id}` (see [`crate::script::marker`]), `f(context)` supplies the value.
+    pub fn with_fn(
+        mut self,
+        id: &str,
+        f: impl Fn(&Value) -> Result<Value, String> + Send + Sync + 'static,
+    ) -> Self {
+        let f: crate::script::NamedFn = std::sync::Arc::new(f);
+        self.script = Some(match &self.script {
+            Some(s) => s.with_named(id, f),
+            None => crate::script::Script::default().with_named(id, f),
+        });
+        self
+    }
+
+    /// Send scriptable-option calls to `script` (how language bindings hook in).
+    pub fn with_script(mut self, script: crate::script::Script) -> Self {
+        self.script = Some(script);
+        self
     }
 
     pub fn datasets(&self) -> &[Value] {

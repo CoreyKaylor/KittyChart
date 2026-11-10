@@ -101,7 +101,7 @@ pub fn resolve_target(
 #[derive(Debug, Clone)]
 pub enum TargetGeom {
     /// Another line (dataset or stack line) or a boundary line built from the source.
-    Line(Line, Vec<Point>),
+    Line(Box<Line>, Vec<Point>),
     /// A circle (radial scale with circular grid).
     Arc { x: f64, y: f64, radius: f64 },
     /// `fill: 'shape'`: the line's own outline.
@@ -219,8 +219,8 @@ pub struct FillJob<'a> {
     pub line: &'a Line,
     pub points: &'a [Point],
     pub target: TargetGeom,
-    pub above: Color,
-    pub below: Color,
+    pub above: Paint,
+    pub below: Paint,
     /// `line._loop ? 'angle' : indexAxis`.
     pub prop: Prop,
     pub chart_area: ChartArea,
@@ -238,29 +238,29 @@ pub fn draw_fill(c: &mut dyn Canvas, job: &FillJob<'_>) {
     let b = job.index_bounds;
     crate::draw::clip_area(c, b.left, b.top, b.right, b.bottom);
     c.save();
-    let mut fill_color = job.below;
+    let mut fill_color = job.below.clone();
     if job.below != job.above && matches!(job.target, TargetGeom::Line(..)) {
         let area = job.chart_area;
         match job.prop {
             Prop::X => {
                 clip_to_target(c, &job.target, area.top, true);
-                fill(c, job, job.above);
+                fill(c, job, &job.above);
                 c.restore();
                 c.save();
                 clip_to_target(c, &job.target, area.bottom, true);
             }
             Prop::Y => {
                 clip_to_target(c, &job.target, area.left, false);
-                fill(c, job, job.below);
+                fill(c, job, &job.below);
                 c.restore();
                 c.save();
                 clip_to_target(c, &job.target, area.right, false);
-                fill_color = job.above;
+                fill_color = job.above.clone();
             }
             Prop::Angle => {}
         }
     }
-    fill(c, job, fill_color);
+    fill(c, job, &fill_color);
     c.restore();
     c.restore();
 }
@@ -299,11 +299,13 @@ fn clip_to_target(c: &mut dyn Canvas, target: &TargetGeom, edge: f64, vertical: 
     c.clip();
 }
 
-fn fill(c: &mut dyn Canvas, job: &FillJob<'_>, color: Color) {
+fn fill(c: &mut dyn Canvas, job: &FillJob<'_>, color: &Paint) {
     let shape = matches!(job.target, TargetGeom::Shape);
     for part in parts(job.line, job.points, &job.target, job.prop) {
         c.save();
-        c.set_fill_style(Paint::Solid(color));
+        // A segment's own `backgroundColor` (segment styling) wins over the dataset's.
+        let style = part.source.style.and_then(|i| job.line.styles.get(i));
+        c.set_fill_style(style.and_then(|s| s.background_color.clone()).unwrap_or_else(|| color.clone()));
         if !shape {
             clip_bounds(c, &job.chart_area, job.clip, get_bounds(job.prop, part.start, part.end, false));
         }

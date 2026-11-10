@@ -219,6 +219,28 @@ pub unsafe extern "C" fn kc_render_png(
     })
 }
 
+/// Render to an SVG document (NUL-terminated UTF-8). Text is drawn as outlines, so the SVG
+/// needs no fonts.
+///
+/// # Safety
+/// `chart` is valid; `opts` is NULL or valid; `out` is valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_render_svg(
+    chart: *const kc_chart,
+    opts: *const kc_render_options,
+    out: *mut kc_bytes,
+) -> c_int {
+    guard(|| {
+        // SAFETY: caller contract.
+        let (chart, out) =
+            unsafe { (chart.as_ref().ok_or("chart is NULL")?, out.as_mut().ok_or("out is NULL")?) };
+        // SAFETY: caller contract.
+        let r = unsafe { render_options(opts) }?;
+        *out = bytes(kittychart::render_svg(chart.config.clone(), &r).into_bytes());
+        Ok(())
+    })
+}
+
 /// Render to raw RGBA pixels.
 ///
 /// # Safety

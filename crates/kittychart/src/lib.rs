@@ -9,10 +9,14 @@
 //! std::fs::write("chart.png", image.to_png()).unwrap();
 //! ```
 
+/// The drawing layer (Canvas2D-style API, raster and cell backends).
+pub use kittychart_canvas as canvas;
 pub use kittychart_canvas::cells::{CellGrid, CellMode};
 pub use kittychart_canvas::{Color, FontContext};
 /// Parse any CSS color (`#36a2eb`, `rgb(…)`, `hsl(…)`, named colors, `transparent`).
 pub use kittychart_core::color::parse as parse_color;
+/// Scriptable options: functions in place of option values (see [`script::Script`]).
+pub use kittychart_core::script;
 pub use kittychart_core::{Chart, ChartConfig, ChartType, ConfigError, Label, TerminalColors, Theme};
 
 pub mod show;
@@ -99,6 +103,20 @@ pub fn render(config: ChartConfig, opts: &RenderOptions) -> Image {
     chart.dpr = f64::from(opts.dpr);
     chart.draw(&mut canvas);
     Image { width: canvas.pixel_width(), height: canvas.pixel_height(), rgba: canvas.to_rgba() }
+}
+
+/// Render as an SVG document, the same chart as [`render`] (`pixel_size` is ignored). Text is
+/// drawn as glyph outlines, so the SVG needs no fonts.
+pub fn render_svg(config: ChartConfig, opts: &RenderOptions) -> String {
+    let mut chart = Chart::with_theme(config, opts.theme.clone());
+    let height = opts.height.unwrap_or_else(|| (f64::from(opts.width) / chart.aspect_ratio()) as f32);
+    let mut canvas = kittychart_canvas::SvgCanvas::new(opts.width, height, opts.dpr);
+    if let Some(bg) = opts.background {
+        canvas.fill_background(bg);
+    }
+    chart.dpr = f64::from(opts.dpr);
+    chart.draw(&mut canvas);
+    canvas.finish()
 }
 
 /// Render as terminal cells (the text fallback): `cols × rows` cells, graphics as block or

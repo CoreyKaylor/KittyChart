@@ -16,7 +16,7 @@ chart = kittychart.Chart(
     options={"plugins": {"title": {"display": True, "text": "This week"}}},
 )
 chart.show()                       # draw at the cursor
-chart.save("chart.png", width=800, scale=2)
+chart.save("chart.png", width=800, scale=2)   # or "chart.svg"
 print(chart.to_text(cols=60))      # block/Braille text with ANSI colors
 ```
 

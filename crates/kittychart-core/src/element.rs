@@ -18,8 +18,8 @@ pub struct PointOptions {
     pub point_style: PointStyle,
     pub rotation: f64,
     pub border_width: f64,
-    pub background_color: Option<Color>,
-    pub border_color: Option<Color>,
+    pub background_color: Option<Paint>,
+    pub border_color: Option<Paint>,
 }
 
 impl PointOptions {
@@ -52,9 +52,9 @@ impl Point {
         if self.skip || o.radius < 0.1 || !in_area(self.x, self.y, area, o.size() / 2.0) {
             return;
         }
-        c.set_stroke_style(Paint::Solid(o.border_color.unwrap_or(Color::TRANSPARENT)));
+        c.set_stroke_style(o.border_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT)));
         c.set_line_width(o.border_width as f32);
-        c.set_fill_style(Paint::Solid(o.background_color.unwrap_or(Color::TRANSPARENT)));
+        c.set_fill_style(o.background_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT)));
         draw_point(c, o.point_style, o.radius, o.rotation, o.border_width, self.x, self.y, None);
     }
 }
@@ -87,8 +87,8 @@ pub enum SpanGaps {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineOptions {
     pub border_width: f64,
-    pub border_color: Option<Color>,
-    pub background_color: Option<Color>,
+    pub border_color: Option<Paint>,
+    pub background_color: Option<Paint>,
     pub cap: LineCap,
     pub join: LineJoin,
     pub dash: Vec<f64>,
@@ -105,6 +105,20 @@ pub struct Segment {
     pub start: usize,
     pub end: usize,
     pub looped: bool,
+    /// Index into [`Line::styles`] when segment styling split the line here.
+    pub style: Option<usize>,
+}
+
+/// One segment's style (`readStyle`): unset fields fall back to the line's options.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SegStyle {
+    pub background_color: Option<Paint>,
+    pub border_color: Option<Paint>,
+    pub border_width: Option<f64>,
+    pub dash: Option<Vec<f64>>,
+    pub dash_offset: Option<f64>,
+    pub cap: Option<LineCap>,
+    pub join: Option<LineJoin>,
 }
 
 /// The point property a fill or interpolation runs along.
@@ -178,11 +192,14 @@ pub struct Line {
     pub looped: bool,
     /// `_fullLoop`: every label has a point.
     pub full_loop: bool,
+    /// With `segment` options: the segments split by style (see [`Line::split_by_styles`]).
+    pub styled: Option<Vec<Segment>>,
+    pub styles: Vec<SegStyle>,
 }
 
 impl Line {
     pub fn new(options: LineOptions) -> Line {
-        Line { options, looped: false, full_loop: false }
+        Line { options, looped: false, full_loop: false, styled: None, styles: Vec::new() }
     }
 
     fn uses_curve(&self) -> bool {
@@ -226,8 +243,103 @@ impl Line {
         }
     }
 
-    /// `_computeSegments` (no segment styling yet).
+    /// `_computeSegments`: the drawable segments, split by style when `segment` options apply.
     pub fn segments(&self, points: &[Point]) -> Vec<Segment> {
+        if let Some(s) = &self.styled {
+            return s.clone();
+        }
+        self.solid_segments(points)
+    }
+
+    /// `splitByStyles`: split the solid segments wherever the style that `style(p0, p1)`
+    /// computes for consecutive points changes.
+    pub fn split_by_styles(&mut self, points: &[Point], mut style: impl FnMut(usize, usize) -> SegStyle) {
+        let segments = self.solid_segments(points);
+        let count = points.len();
+        if count == 0 || segments.is_empty() {
+            return;
+        }
+        let o = &self.options;
+        let base = SegStyle {
+            background_color: o.background_color.clone(),
+            border_color: o.border_color.clone(),
+            border_width: Some(o.border_width),
+            dash: Some(o.dash.clone()),
+            dash_offset: Some(o.dash_offset),
+            cap: Some(o.cap),
+            join: Some(o.join),
+        };
+        let span_gaps = o.span_gaps != SpanGaps::No;
+        let mut result: Vec<Segment> = Vec::new();
+        let mut styles: Vec<SegStyle> = Vec::new();
+        let mut prev_style = base;
+        let mut start = segments[0].start;
+        // addStyle
+        let mut add = |s: usize,
+                       e: usize,
+                       looped: bool,
+                       st: &SegStyle,
+                       start: &mut usize,
+                       prev_style: &mut SegStyle| {
+            if s == e {
+                return;
+            }
+            let (mut s, mut e) = (s + count, e);
+            if span_gaps {
+                while points[s % count].skip {
+                    s += 1;
+                }
+                while points[e % count].skip {
+                    e -= 1;
+                }
+            } else {
+                while points[s % count].skip {
+                    s -= 1;
+                }
+                while points[e % count].skip {
+                    e += 1;
+                }
+            }
+            if s % count != e % count {
+                styles.push(st.clone());
+                result.push(Segment {
+                    start: s % count,
+                    end: e % count,
+                    looped,
+                    style: Some(styles.len() - 1),
+                });
+                *prev_style = st.clone();
+                *start = e % count;
+            }
+        };
+        for seg in &segments {
+            if !span_gaps {
+                start = seg.start;
+            }
+            let end = if seg.end < start { seg.end + count } else { seg.end };
+            let mut prev = start;
+            let mut i = start + 1;
+            while i <= end {
+                let st = style(prev % count, i % count);
+                if st != prev_style {
+                    let ps = prev_style.clone();
+                    add(start, i - 1, seg.looped, &ps, &mut start, &mut prev_style);
+                }
+                prev = i;
+                prev_style = st;
+                i += 1;
+            }
+            if start + 1 < i {
+                let ps = prev_style.clone();
+                add(start, i - 1, seg.looped, &ps, &mut start, &mut prev_style);
+            }
+        }
+        self.styles = styles;
+        self.styled = Some(result);
+    }
+
+    /// `_computeSegments` without styles: the runs of points between gaps.
+    pub fn solid_segments(&self, points: &[Point]) -> Vec<Segment> {
         let count = points.len();
         if count == 0 {
             return vec![];
@@ -253,7 +365,7 @@ impl Line {
         }
         end %= count;
         if self.options.span_gaps == SpanGaps::Yes {
-            return vec![Segment { start, end, looped: self.looped }];
+            return vec![Segment { start, end, looped: self.looped, style: None }];
         }
         let max = if end < start { end + count } else { end };
         let complete_loop = self.full_loop && start == 0 && end == count - 1;
@@ -413,7 +525,31 @@ impl Line {
         c.set_line_dash_offset(o.dash_offset as f32);
         c.set_line_join(o.join);
         c.set_line_width(o.border_width as f32);
-        c.set_stroke_style(Paint::Solid(o.border_color.unwrap_or(Color::TRANSPARENT)));
+        c.set_stroke_style(o.border_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT)));
+        if self.styled.is_some() {
+            // strokePathDirect: each segment on its own, in its style.
+            for seg in self.segments(points) {
+                let st = seg.style.and_then(|i| self.styles.get(i));
+                let dash = st.and_then(|s| s.dash.as_ref()).unwrap_or(&o.dash);
+                c.set_line_cap(st.and_then(|s| s.cap).unwrap_or(o.cap));
+                c.set_line_dash(&dash.iter().map(|d| *d as f32).collect::<Vec<f32>>());
+                c.set_line_dash_offset(st.and_then(|s| s.dash_offset).unwrap_or(o.dash_offset) as f32);
+                c.set_line_join(st.and_then(|s| s.join).unwrap_or(o.join));
+                c.set_line_width(st.and_then(|s| s.border_width).unwrap_or(o.border_width) as f32);
+                c.set_stroke_style(
+                    st.and_then(|s| s.border_color.clone())
+                        .or_else(|| o.border_color.clone())
+                        .unwrap_or(Paint::Solid(Color::TRANSPARENT)),
+                );
+                c.begin_path();
+                if self.path_segment(c, points, seg, false, true) {
+                    c.close_path();
+                }
+                c.stroke();
+            }
+            c.restore();
+            return;
+        }
         // Chart.js strokes one Path2D holding every segment, closed if it loops.
         c.begin_path();
         if self.path(c, points) {
@@ -437,7 +573,7 @@ fn solid_segments(points: &[Point], start: usize, max: usize, mut looped: bool) 
             if !prev_skip {
                 looped = false;
                 if let Some(s) = seg_start {
-                    result.push(Segment { start: s % count, end: (e - 1) % count, looped });
+                    result.push(Segment { start: s % count, end: (e - 1) % count, looped, style: None });
                 }
                 seg_start = if cur.stop { Some(e) } else { None };
                 last = seg_start;
@@ -451,7 +587,7 @@ fn solid_segments(points: &[Point], start: usize, max: usize, mut looped: bool) 
         prev_skip = cur.skip;
     }
     if let (Some(s), Some(l)) = (seg_start, last) {
-        result.push(Segment { start: s % count, end: l % count, looped });
+        result.push(Segment { start: s % count, end: l % count, looped, style: None });
     }
     result
 }
@@ -517,6 +653,7 @@ pub fn bound_segment(seg: Segment, points: &[Point], bounds: Option<Bounds>) -> 
         start: s % count,
         end: e % count,
         looped: seg.looped && (e - s + 1).is_multiple_of(count),
+        style: seg.style,
     };
     let mut result = Vec::new();
     let mut inside;
@@ -709,8 +846,8 @@ pub struct Edges {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BarOptions {
-    pub background_color: Option<Color>,
-    pub border_color: Option<Color>,
+    pub background_color: Option<Paint>,
+    pub border_color: Option<Paint>,
     pub border_width: Padding,
     pub border_radius: Corners,
     /// The radius option was an object (enables radius on all corners Chart.js-style).
@@ -810,12 +947,12 @@ impl Bar {
             add(c, inflate_rect(outer, self.inflate_amount, Some(inner)));
             c.clip();
             add(c, inflate_rect(inner, -self.inflate_amount, Some(outer)));
-            c.set_fill_style(Paint::Solid(self.options.border_color.unwrap_or(Color::TRANSPARENT)));
+            c.set_fill_style(self.options.border_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT)));
             c.fill_with_rule(FillRule::EvenOdd);
         }
         c.begin_path();
         add(c, inflate_rect(inner, self.inflate_amount, None));
-        c.set_fill_style(Paint::Solid(self.options.background_color.unwrap_or(Color::TRANSPARENT)));
+        c.set_fill_style(self.options.background_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT)));
         c.fill();
         c.restore();
     }

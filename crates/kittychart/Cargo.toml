@@ -20,6 +20,8 @@ datatest-stable = { workspace = true }
 dssim-core = { workspace = true }
 insta = { workspace = true }
 rgb = "0.8"
+serde_json.workspace = true
+resvg = "0.49.0"
 
 [[test]]
 name = "fixtures"

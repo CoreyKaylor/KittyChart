@@ -1,0 +1,19 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"],
+    "datasets": [{
+      "label": "Revenue",
+      "data": [12, 19, 14, 25, 22, 30, 28],
+      "fill": true,
+      "tension": 0.35,
+      "borderWidth": 3,
+      "borderColor": { "type": "linear", "x0": "left", "y0": 0, "x1": "right", "y1": 0,
+                       "stops": [[0, "#36a2eb"], [1, "#ff6384"]] },
+      "backgroundColor": { "type": "linear", "x0": 0, "y0": "bottom", "x1": 0, "y1": "top",
+                           "stops": [[0, "rgba(54, 162, 235, 0)"], [1, "rgba(54, 162, 235, 0.6)"]] }
+    }]
+  },
+  "options": { "plugins": { "title": { "display": true, "text": "Gradient border and fill" } } },
+  "_kc": { "width": 512, "height": 256 }
+}

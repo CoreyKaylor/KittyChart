@@ -14,7 +14,7 @@ struct Args {
     /// Chart.js config JSON file. Reads stdin when omitted or `-`.
     file: Option<PathBuf>,
 
-    /// Write a PNG here instead of displaying in the terminal.
+    /// Write a PNG (or, for a `.svg` name, an SVG) here instead of displaying in the terminal.
     #[arg(short, long)]
     out: Option<PathBuf>,
 
@@ -104,8 +104,12 @@ fn run(args: Args) -> Result<(), String> {
         let mut opts = RenderOptions::new(args.width.unwrap_or(800.0)).dpr(args.scale.unwrap_or(1.0));
         opts.height = args.height;
         opts.background = background;
-        let img = kittychart::render(config, &opts);
-        std::fs::write(out, img.to_png()).map_err(|e| format!("{}: {e}", out.display()))?;
+        let bytes = if out.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+            kittychart::render_svg(config, &opts).into_bytes()
+        } else {
+            kittychart::render(config, &opts).to_png()
+        };
+        std::fs::write(out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
         return Ok(());
     }
     display(config, &args, background)

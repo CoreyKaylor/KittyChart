@@ -2,6 +2,7 @@
 //! Mirrors the flow of Chart.js `core.controller.js` `update()` + `draw()`.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use kittychart_canvas::{Canvas, Color, LineCap, LineJoin, Paint, TextAlign};
 use serde_json::{Value, json};
@@ -11,12 +12,12 @@ use crate::config::{ChartConfig, ChartType, Label};
 use crate::defaults::{BACKGROUND_COLORS, BORDER_COLORS, DEFAULTS, overrides_for};
 use crate::draw::{PointStyle, clip_area};
 use crate::element::{
-    Bar, BarOptions, Edges, Line, LineOptions, Point, PointOptions, Prop, SpanGaps, Stepped,
+    Bar, BarOptions, Edges, Line, LineOptions, Point, PointOptions, Prop, SegStyle, SpanGaps, Stepped,
 };
 use crate::filler::{FillJob, FillSpec, FillTarget, TargetGeom};
 use crate::layout::{self, LayoutItem};
 use crate::math::{is_between, sign};
-use crate::options::{Corners, FontSpec, Padding, Scopes, as_num, merge_if};
+use crate::options::{Corners, FontSpec, Padding, Scopes, ScriptCtx, as_num, merge_if};
 use crate::plugins::{Legend, LegendItem, LegendLabels, LegendTitle, TextBlock};
 use crate::radial::RadialScale;
 use crate::scale::{Axis, ChartArea, Position, Scale, ScaleKind, Stacked};
@@ -209,6 +210,83 @@ impl Chart {
         self.config.chart_type
     }
 
+    // ------------------------------------------------------------------ script contexts
+
+    /// A scriptable-option context (see [`crate::script`]), or `None` without functions.
+    fn script_ctx<'a>(
+        &'a self,
+        base: impl FnOnce() -> Value,
+        per_index: Option<Box<dyn Fn(usize) -> Value + 'a>>,
+    ) -> Option<Rc<ScriptCtx<'a>>> {
+        let script = self.config.script.clone()?;
+        Some(Rc::new(ScriptCtx { script, base: base(), per_index }))
+    }
+
+    /// Chart.js's chart context.
+    pub fn chart_context(&self) -> Value {
+        let a = &self.chart_area;
+        json!({
+            "type": "chart",
+            "chart": {
+                "width": self.width,
+                "height": self.height,
+                "chartArea": {
+                    "left": a.left, "top": a.top, "right": a.right, "bottom": a.bottom,
+                    "width": a.width(), "height": a.height(),
+                },
+            },
+        })
+    }
+
+    /// The dataset context: the chart context plus the dataset (without its data).
+    pub fn dataset_context(&self, ds: usize) -> Value {
+        let mut c = self.chart_context();
+        let mut dataset = self.datasets.get(ds).cloned().unwrap_or(Value::Null);
+        if let Value::Object(o) = &mut dataset {
+            o.remove("data");
+        }
+        c["type"] = json!("dataset");
+        c["datasetIndex"] = json!(ds);
+        c["index"] = json!(ds);
+        c["dataset"] = dataset;
+        c["mode"] = json!("default");
+        c["active"] = json!(false);
+        c
+    }
+
+    /// The fields a data context adds to the dataset context for element `i`.
+    fn data_context_fields(&self, ds: usize, i: usize) -> Value {
+        let raw = self.datasets.get(ds).and_then(|d| d["data"].get(i)).cloned().unwrap_or(Value::Null);
+        let parsed = self.metas.iter().find(|m| m.index == ds).and_then(|m| m.parsed.get(i)).map_or(
+            Value::Null,
+            |p| {
+                let mut o = json!({ "x": p.x, "y": p.y });
+                if let Some(r) = p.r {
+                    o["r"] = json!(r);
+                }
+                if let Some(c) = &p.custom {
+                    o["_custom"] = json!({ "barStart": c.bar_start, "barEnd": c.bar_end });
+                }
+                o
+            },
+        );
+        json!({ "type": "data", "dataIndex": i, "index": i, "raw": raw, "parsed": parsed })
+    }
+
+    /// The data context for element `i` of dataset `ds`.
+    pub fn data_context(&self, ds: usize, i: usize) -> Value {
+        let mut c = self.dataset_context(ds);
+        if let (Value::Object(o), Value::Object(extra)) = (&mut c, self.data_context_fields(ds, i)) {
+            o.extend(extra);
+        }
+        c
+    }
+
+    /// A color option that may also be a gradient (see [`crate::gradient`]).
+    fn paint_at(&self, s: &Scopes<'_>, key: &str, idx: Option<usize>) -> Option<Paint> {
+        crate::gradient::paint(s.get_at(key, idx)?, &self.chart_area)
+    }
+
     /// `chartOptionScopes()`: options, overrides[type], defaults.datasets[type], defaults.
     fn chart_scopes(&self) -> Scopes<'_> {
         let t = self.chart_type().as_str();
@@ -219,6 +297,7 @@ impl Chart {
             &self.theme_layer,
             &*DEFAULTS,
         ])
+        .with_script(self.script_ctx(|| self.chart_context(), None))
     }
 
     fn plugin_scopes(&self, id: &str) -> Scopes<'_> {
@@ -229,6 +308,7 @@ impl Chart {
             &self.theme_layer["plugins"][id],
             &DEFAULTS["plugins"][id],
         ])
+        .with_script(self.script_ctx(|| self.chart_context(), None))
     }
 
     /// `datasetScopeKeys`: dataset → options.datasets[T] → options → overrides → defaults.
@@ -246,6 +326,7 @@ impl Chart {
             &self.theme_layer,
             &*DEFAULTS,
         ])
+        .with_script(self.script_ctx(|| self.dataset_context(ds), None))
     }
 
     /// `datasetElementScopeKeys(T, el)` with element prefixes.
@@ -272,6 +353,10 @@ impl Chart {
             d,
         ])
         .with_prefixes(&[el, ""])
+        .with_script(self.script_ctx(
+            || self.dataset_context(ds),
+            Some(Box::new(move |i| self.data_context_fields(ds, i))),
+        ))
     }
 
     fn index_axis_for(&self, kind: ChartType, ds: Option<usize>) -> Axis {
@@ -404,7 +489,9 @@ impl Chart {
             .and_then(Value::as_array)
             .map(|a| a.iter().map(Label::from_value).collect())
             .unwrap_or_else(|| labels.clone());
-            self.scales.push(Scale::new(&id, kind, axis, merged, routes, self.font_fallback.clone(), labels));
+            let mut scale = Scale::new(&id, kind, axis, merged, routes, self.font_fallback.clone(), labels);
+            scale.script = self.config.script.clone();
+            self.scales.push(scale);
         }
     }
 
@@ -878,6 +965,29 @@ impl Chart {
             padding: Padding::from_value(t.get("padding")),
             position: t.str("position").unwrap_or("center").to_owned(),
         };
+        let items = self.legend_items();
+        let legend = Legend::new(
+            l.bool_or("display", true),
+            l.str("position").and_then(Position::parse).unwrap_or(Position::Top),
+            l.str("align").unwrap_or("center").to_owned(),
+            l.num_or("weight", 1000.0),
+            l.bool_or("fullSize", true),
+            l.num("maxWidth"),
+            l.num("maxHeight"),
+            legend_labels,
+            legend_title,
+            items,
+        );
+        drop((labels, l, t, global_font));
+        self.legend = legend;
+    }
+
+    /// The legend's items (`generateLabels`), with styles resolved against the current chart
+    /// area (gradients depend on it).
+    fn legend_items(&self) -> Vec<LegendItem> {
+        let l = self.plugin_scopes("legend");
+        let labels = l.child("labels");
+        let use_point_style = labels.bool_or("usePointStyle", false);
         let point_style_override = labels.get("pointStyle").map(|v| PointStyle::from_value(Some(v)));
         let use_border_radius = labels.bool_or("useBorderRadius", false);
         let label_border_radius = labels.get("borderRadius").cloned();
@@ -899,8 +1009,8 @@ impl Chart {
             let bw = Padding::from_value(s.get_at("borderWidth", idx));
             items.push(LegendItem {
                 text: meta.label.clone(),
-                fill_style: s.color_at("backgroundColor", idx),
-                stroke_style: s.color_at("borderColor", idx),
+                fill_style: self.paint_at(&s, "backgroundColor", idx),
+                stroke_style: self.paint_at(&s, "borderColor", idx),
                 line_width: (bw.width() + bw.height()) / 4.0,
                 line_cap: parse_cap(s.str("borderCapStyle")),
                 line_join: parse_join(s.str("borderJoinStyle")),
@@ -922,18 +1032,7 @@ impl Chart {
         if l.bool_or("reverse", false) {
             items.reverse();
         }
-        self.legend = Legend::new(
-            l.bool_or("display", true),
-            l.str("position").and_then(Position::parse).unwrap_or(Position::Top),
-            l.str("align").unwrap_or("center").to_owned(),
-            l.num_or("weight", 1000.0),
-            l.bool_or("fullSize", true),
-            l.num("maxWidth"),
-            l.num("maxHeight"),
-            legend_labels,
-            legend_title,
-            items,
-        );
+        items
     }
 
     /// Doughnut/pie `generateLabels`: one item per data label, styled like dataset 0's arcs.
@@ -952,8 +1051,8 @@ impl Chart {
                 let idx = Some(i);
                 LegendItem {
                     text: label.clone(),
-                    fill_style: s.color_at("backgroundColor", idx),
-                    stroke_style: s.color_at("borderColor", idx),
+                    fill_style: self.paint_at(&s, "backgroundColor", idx),
+                    stroke_style: self.paint_at(&s, "borderColor", idx),
                     line_width: s.num_at("borderWidth", idx).unwrap_or(2.0),
                     line_cap: LineCap::Butt,
                     line_join: parse_join(s.str("borderJoinStyle")),
@@ -990,8 +1089,8 @@ impl Chart {
             }
         };
         ArcOptions {
-            background_color: s.color_at("backgroundColor", idx),
-            border_color: s.color_at("borderColor", idx),
+            background_color: self.paint_at(&s, "backgroundColor", idx),
+            border_color: self.paint_at(&s, "borderColor", idx),
             border_width: s.num_at("borderWidth", idx).unwrap_or(2.0),
             border_align_inner: s.str("borderAlign") == Some("inner"),
             border_join: s
@@ -1029,8 +1128,8 @@ impl Chart {
             point_style: PointStyle::from_value(s.get_at("pointStyle", idx)),
             rotation: s.num_at("rotation", idx).unwrap_or(0.0),
             border_width: s.num_at("borderWidth", idx).unwrap_or(1.0),
-            background_color: s.color_at("backgroundColor", idx),
-            border_color: s.color_at("borderColor", idx),
+            background_color: self.paint_at(&s, "backgroundColor", idx),
+            border_color: self.paint_at(&s, "borderColor", idx),
         }
     }
 
@@ -1046,8 +1145,8 @@ impl Chart {
         let show_line = ds.bool_or("showLine", true);
         LineOptions {
             border_width: if show_line { s.num_or("borderWidth", 3.0) } else { 0.0 },
-            border_color: s.color_at("borderColor", None),
-            background_color: s.color_at("backgroundColor", None),
+            border_color: self.paint_at(&s, "borderColor", None),
+            background_color: self.paint_at(&s, "backgroundColor", None),
             cap: parse_cap(s.str("borderCapStyle")),
             join: parse_join(s.str("borderJoinStyle")),
             dash: s.num_list("borderDash"),
@@ -1072,8 +1171,8 @@ impl Chart {
         let idx = Some(i);
         let radius = s.get_at("borderRadius", idx);
         BarOptions {
-            background_color: s.color_at("backgroundColor", idx),
-            border_color: s.color_at("borderColor", idx),
+            background_color: self.paint_at(&s, "backgroundColor", idx),
+            border_color: self.paint_at(&s, "borderColor", idx),
             border_width: Padding::from_value(s.get_at("borderWidth", idx)),
             border_radius: Corners::from_value(radius),
             border_radius_is_object: radius.is_some_and(Value::is_object),
@@ -1133,6 +1232,7 @@ impl Chart {
         let threshold_opt = d.num("threshold").filter(|t| *t > 0.0);
         let algorithm = d.str("algorithm").unwrap_or("min-max").to_owned();
         let samples_opt = d.num("samples").filter(|s| *s > 0.0);
+        drop(d);
         let parsing_off = self.config.options.get("parsing") == Some(&Value::Bool(false));
         let mut changed = false;
         for m in 0..self.metas.len() {
@@ -1224,7 +1324,7 @@ impl Chart {
         match target {
             FillTarget::Dataset(i) => {
                 let other = self.metas.iter().find(|o| o.index == i && o.visible)?;
-                Some(TargetGeom::Line(other.line.clone()?, other.points.clone()))
+                Some(TargetGeom::Line(Box::new(other.line.clone()?), other.points.clone()))
             }
             FillTarget::Shape => Some(TargetGeom::Shape),
             FillTarget::Stack => {
@@ -1243,7 +1343,7 @@ impl Chart {
                     }
                 }
                 let pts = crate::filler::stack_line(line, &meta.points, &below, self.scales[vs].bottom);
-                Some(TargetGeom::Line(Line::new(LineOptions::plain()), pts))
+                Some(TargetGeom::Line(Box::new(Line::new(LineOptions::plain())), pts))
             }
             _ if meta.kind == ChartType::Radar => {
                 let r = self.radial.as_ref()?;
@@ -1272,7 +1372,7 @@ impl Chart {
                     .collect();
                 (!pts.is_empty()).then(|| {
                     TargetGeom::Line(
-                        Line { options: LineOptions::plain(), looped: true, full_loop: true },
+                        Box::new(Line { looped: true, full_loop: true, ..Line::new(LineOptions::plain()) }),
                         pts,
                     )
                 })
@@ -1290,7 +1390,7 @@ impl Chart {
                 }
                 let (x, y) = if vs.is_horizontal() { (Some(pixel), None) } else { (None, Some(pixel)) };
                 let pts = crate::filler::boundary_points(line, &meta.points, x, y);
-                (!pts.is_empty()).then(|| TargetGeom::Line(Line::new(LineOptions::plain()), pts))
+                (!pts.is_empty()).then(|| TargetGeom::Line(Box::new(Line::new(LineOptions::plain())), pts))
             }
         }
     }
@@ -1300,7 +1400,7 @@ impl Chart {
         let (Some(line), Some(spec)) = (&meta.line, &meta.fill) else { return };
         let Some(target) = spec.target else { return };
         let Some(geom) = self.fill_target(m, target) else { return };
-        let color = line.options.background_color.unwrap_or(Color::TRANSPARENT);
+        let color = line.options.background_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT));
         let area = self.chart_area;
         let index_bounds = if meta.kind == ChartType::Radar {
             area
@@ -1331,8 +1431,8 @@ impl Chart {
             line,
             points: &meta.points,
             target: geom,
-            above: spec.above.unwrap_or(color),
-            below: spec.below.unwrap_or(color),
+            above: spec.above.map_or_else(|| color.clone(), Paint::Solid),
+            below: spec.below.map_or_else(|| color.clone(), Paint::Solid),
             prop,
             chart_area: area,
             clip,
@@ -1418,8 +1518,53 @@ impl Chart {
             });
             prev = Some(*p);
         }
+        let line = self.shows_line(m).then(|| {
+            let mut line = Line::new(line_opts);
+            self.apply_segment_styles(m, &mut line, &points);
+            line
+        });
         self.metas[m].points = points;
-        self.metas[m].line = self.shows_line(m).then_some(Line::new(line_opts));
+        self.metas[m].line = line;
+    }
+
+    /// `segment` options: split the line where their style changes (Chart.js `splitByStyles`).
+    /// Each pair of consecutive points is resolved with a `segment` context.
+    fn apply_segment_styles(&self, m: usize, line: &mut Line, points: &[Point]) {
+        let meta = &self.metas[m];
+        let el = self.element_scopes(meta.index, meta.kind, "line");
+        let seg = el.child("segment");
+        if seg.is_empty() {
+            return;
+        }
+        let point = |i: usize| {
+            let p = &points[i];
+            let parsed = meta.parsed.get(i).map_or(Value::Null, |q| json!({ "x": q.x, "y": q.y }));
+            json!({ "x": p.x, "y": p.y, "skip": p.skip, "parsed": parsed })
+        };
+        line.split_by_styles(points, |a, b| {
+            let ctx = self.script_ctx(
+                || {
+                    let mut c = self.dataset_context(meta.index);
+                    c["type"] = json!("segment");
+                    c["p0"] = point(a);
+                    c["p1"] = point(b);
+                    c["p0DataIndex"] = json!(a);
+                    c["p1DataIndex"] = json!(b);
+                    c
+                },
+                None,
+            );
+            let s = seg.clone().with_script(ctx);
+            SegStyle {
+                background_color: self.paint_at(&s, "backgroundColor", None),
+                border_color: self.paint_at(&s, "borderColor", None),
+                border_width: s.num("borderWidth"),
+                dash: s.get("borderDash").map(|_| s.num_list("borderDash")),
+                dash_offset: s.num("borderDashOffset"),
+                cap: s.str("borderCapStyle").map(|v| parse_cap(Some(v))),
+                join: s.str("borderJoinStyle").map(|v| parse_join(Some(v))),
+            }
+        });
     }
 
     /// The radar controller's `update()`: points on the radial scale, joined by a closed line.
@@ -1448,8 +1593,10 @@ impl Chart {
             line_opts.border_width = 0.0;
         }
         let full_loop = r.point_labels.len() == n;
+        let mut line = Line { looped: true, full_loop, ..Line::new(line_opts) };
+        self.apply_segment_styles(m, &mut line, &points);
         self.metas[m].points = points;
-        self.metas[m].line = Some(Line { options: line_opts, looped: true, full_loop });
+        self.metas[m].line = Some(line);
     }
 
     /// The polar area controller's `update()`: equal-angle arcs whose radius is the value.
@@ -1489,6 +1636,7 @@ impl Chart {
                 options,
             });
         }
+        drop(ds);
         self.metas[m].arcs = arcs;
     }
 
@@ -1594,6 +1742,7 @@ impl Chart {
             });
             start += len;
         }
+        drop(ds);
         self.metas[m].arcs = arcs;
     }
 
@@ -1701,6 +1850,7 @@ impl Chart {
             set_border_skipped(&mut bar, has_stack, top, bottom, meta.index);
             bars.push(bar);
         }
+        drop(ds);
         self.metas[m].bars = bars;
     }
 
@@ -1870,6 +2020,10 @@ impl Chart {
             self.update_stacks();
             self.determine_data_limits();
         }
+        if self.config.script.is_some() {
+            // Scriptable plugin options see the chart's size (Chart.js resolves them per update).
+            self.build_plugins();
+        }
         let auto_padding = self.chart_scopes().child("layout").bool_or("autoPadding", true);
         let min_padding = if auto_padding { self.max_overflow() } else { 0.0 };
         let padding = Padding::from_value(self.chart_scopes().child("layout").get("padding"));
@@ -1887,6 +2041,13 @@ impl Chart {
             layout::update(&mut items, w, h, padding, min_padding, c)
         };
         self.chart_area = area;
+        // Legend swatches resolve against the final chart area (gradients use it), as
+        // Chart.js builds its labels after layout.
+        let fresh = self.legend_items();
+        for (item, fresh) in self.legend.items.iter_mut().zip(fresh) {
+            item.fill_style = fresh.fill_style;
+            item.stroke_style = fresh.stroke_style;
+        }
         for s in &mut self.scales {
             s.configure();
         }

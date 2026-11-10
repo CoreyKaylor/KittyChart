@@ -74,6 +74,16 @@ Regenerate with `just gallery`.
 
 <img src="gallery/fill-start_end_value-light.png" width="400"> <img src="gallery/fill-start_end_value-dark.png" width="400">
 
+## gradient
+
+### [gradient-area_linear](../tests/fixtures/gradient/area_linear.json)
+
+<img src="gallery/gradient-area_linear-light.png" width="400"> <img src="gallery/gradient-area_linear-dark.png" width="400">
+
+### [gradient-bar_radial_doughnut_conic](../tests/fixtures/gradient/bar_radial_doughnut_conic.json)
+
+<img src="gallery/gradient-bar_radial_doughnut_conic-light.png" width="400"> <img src="gallery/gradient-bar_radial_doughnut_conic-dark.png" width="400">
+
 ## line
 
 ### [line-basic](../tests/fixtures/line/basic.json)
@@ -119,6 +129,12 @@ Regenerate with `just gallery`.
 ### [scatter-basic](../tests/fixtures/scatter/basic.json)
 
 <img src="gallery/scatter-basic-light.png" width="400"> <img src="gallery/scatter-basic-dark.png" width="400">
+
+## segment
+
+### [segment-static_dash_fill](../tests/fixtures/segment/static_dash_fill.json)
+
+<img src="gallery/segment-static_dash_fill-light.png" width="400"> <img src="gallery/segment-static_dash_fill-dark.png" width="400">
 
 ## time
 

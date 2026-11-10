@@ -1,0 +1,21 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["a", "b", "c", "d", "e", "f", "g"],
+    "datasets": [{
+      "label": "Projected",
+      "data": [10, 14, null, 12, 18, 9, 15],
+      "spanGaps": true,
+      "fill": true,
+      "borderColor": "#36a2eb",
+      "backgroundColor": "rgba(54, 162, 235, 0.2)",
+      "segment": { "borderDash": [6, 4], "backgroundColor": "rgba(255, 99, 132, 0.3)" }
+    }, {
+      "label": "Solid with a gap",
+      "data": [4, 6, 5, null, 7, 8, 6],
+      "borderColor": "#ff9f40",
+      "segment": { "borderWidth": 6 }
+    }]
+  },
+  "_kc": { "width": 512, "height": 256 }
+}

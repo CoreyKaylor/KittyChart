@@ -48,6 +48,12 @@ int main(int argc, char **argv) {
     fclose(f);
     kc_bytes_free(png);
 
+    /* SVG: a NUL-terminated document. */
+    kc_bytes svg;
+    CHECK(kc_render_svg(chart, NULL, &svg) == 0);
+    CHECK(strncmp((const char *)svg.data, "<svg", 4) == 0 && strstr((const char *)svg.data, "</svg>") != NULL);
+    kc_bytes_free(svg);
+
     /* Text: NUL-terminated, 40 columns of cells. */
     kc_bytes text;
     CHECK(kc_render_text(chart, 40, 0, NULL, &text) == 0);

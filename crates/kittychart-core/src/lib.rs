@@ -14,12 +14,14 @@ pub mod draw;
 pub mod element;
 pub mod filler;
 pub mod format;
+pub mod gradient;
 pub mod layout;
 pub mod math;
 pub mod options;
 pub mod plugins;
 pub mod radial;
 pub mod scale;
+pub mod script;
 pub mod theme;
 pub mod time;
 

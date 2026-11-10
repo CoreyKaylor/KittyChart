@@ -10,10 +10,12 @@
 pub mod cells;
 mod color;
 mod skia;
+pub mod svg;
 mod text;
 
 pub use color::Color;
 pub use skia::SkiaCanvas;
+pub use svg::SvgCanvas;
 pub use text::{BUNDLED_FAMILY, Font, FontContext, TextAlign, TextBaseline, TextMetrics};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -75,6 +77,23 @@ pub enum Paint {
         y: f32,
         stops: Vec<ColorStop>,
     },
+}
+
+impl Paint {
+    /// One color standing for this paint (a gradient's average stop color), for places that
+    /// can only show a single color: legend swatches, terminal cells.
+    pub fn representative(&self) -> Color {
+        let stops = match self {
+            Paint::Solid(c) => return *c,
+            Paint::Linear { stops, .. } | Paint::Radial { stops, .. } | Paint::Conic { stops, .. } => stops,
+        };
+        if stops.is_empty() {
+            return Color::TRANSPARENT;
+        }
+        let n = stops.len() as f32;
+        let avg = |f: fn(&Color) -> f32| stops.iter().map(|s| f(&s.color)).sum::<f32>() / n;
+        Color { r: avg(|c| c.r), g: avg(|c| c.g), b: avg(|c| c.b), a: avg(|c| c.a) }
+    }
 }
 
 impl From<Color> for Paint {

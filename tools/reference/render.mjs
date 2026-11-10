@@ -68,6 +68,37 @@ for (const file of walk(fixturesDir)) {
     canvas.height = height;
     document.body.replaceChildren(canvas);
     config.options = { ...config.options, animation: false, responsive: false, devicePixelRatio: dpr };
+    // KittyChart's declarative gradients ({type, x0…, stops}) become the scriptable options
+    // Chart.js users write: (ctx) => ctx.chart.ctx.createLinearGradient(…).
+    const coord = (v, a, dflt) => {
+      if (v === undefined) return dflt;
+      if (typeof v === 'number') return v;
+      const k = String(v).replace(/^chartArea\./, '');
+      const m = { left: a.left, right: a.right, top: a.top, bottom: a.bottom,
+        centerX: (a.left + a.right) / 2, centerY: (a.top + a.bottom) / 2 };
+      return k in m ? m[k] : Number(k);
+    };
+    const toGradient = (g) => (ctx) => {
+      const a = ctx.chart.chartArea;
+      if (!a) return undefined;
+      const c = ctx.chart.ctx;
+      const cx = (a.left + a.right) / 2, cy = (a.top + a.bottom) / 2;
+      let grad;
+      if (g.type === 'linear') grad = c.createLinearGradient(coord(g.x0, a, a.left), coord(g.y0, a, a.bottom), coord(g.x1, a, a.left), coord(g.y1, a, a.top));
+      else if (g.type === 'radial') grad = c.createRadialGradient(coord(g.x0, a, cx), coord(g.y0, a, cy), coord(g.r0, a, 0), coord(g.x1, a, cx), coord(g.y1, a, cy), coord(g.r1, a, Math.min(a.right - a.left, a.bottom - a.top) / 2));
+      else grad = c.createConicGradient(g.angle ?? 0, coord(g.x, a, cx), coord(g.y, a, cy));
+      for (const s of g.stops) Array.isArray(s) ? grad.addColorStop(s[0], s[1]) : grad.addColorStop(s.offset, s.color);
+      return grad;
+    };
+    const isGradient = (v) => v && typeof v === 'object' && !Array.isArray(v) && ['linear', 'radial', 'conic'].includes(v.type) && Array.isArray(v.stops);
+    const convert = (v) => {
+      if (isGradient(v)) return toGradient(v);
+      if (Array.isArray(v)) return v.map(convert);
+      if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, convert(x)]));
+      return v;
+    };
+    config.data.datasets = convert(config.data.datasets);
+    config.options = convert(config.options);
     config.plugins = [{
       id: 'kcBackground',
       beforeDraw(chart) {

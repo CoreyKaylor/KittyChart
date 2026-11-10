@@ -87,7 +87,8 @@ pub fn assert_golden_with(name: &str, img: Image<'_>, threshold: f64) {
     eprintln!("blessed golden {}", path.display());
 }
 
-fn dssim(a: Image<'_>, b: Image<'_>) -> f64 {
+/// DSSIM between two same-size images (0 = identical).
+pub fn dssim(a: Image<'_>, b: Image<'_>) -> f64 {
     let d = dssim_core::Dssim::new();
     let to_img = |i: Image<'_>| {
         let px: Vec<rgb::RGBA8> =

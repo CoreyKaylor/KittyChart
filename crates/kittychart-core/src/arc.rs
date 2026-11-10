@@ -22,8 +22,8 @@ pub struct ArcRadius {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArcOptions {
-    pub background_color: Option<Color>,
-    pub border_color: Option<Color>,
+    pub background_color: Option<Paint>,
+    pub border_color: Option<Paint>,
     pub border_width: f64,
     pub border_align_inner: bool,
     pub border_join: Option<LineJoin>,
@@ -64,8 +64,8 @@ impl Arc {
         c.translate((half.cos() * offset) as f32, (half.sin() * offset) as f32);
         let fix = 1.0 - self.circumference.min(PI).sin();
         let radius_offset = offset * fix;
-        c.set_fill_style(Paint::Solid(o.background_color.unwrap_or(Color::TRANSPARENT)));
-        c.set_stroke_style(Paint::Solid(o.border_color.unwrap_or(Color::TRANSPARENT)));
+        c.set_fill_style(o.background_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT)));
+        c.set_stroke_style(o.border_color.clone().unwrap_or(Paint::Solid(Color::TRANSPARENT)));
 
         // drawArc
         let mut end = self.end_angle;

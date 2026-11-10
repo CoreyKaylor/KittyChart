@@ -88,6 +88,22 @@ fn render_options(
     Ok(opts)
 }
 
+/// Render to an SVG document.
+#[pyfunction]
+#[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None))]
+fn render_svg(
+    py: Python<'_>,
+    json: &str,
+    width: f32,
+    height: Option<f32>,
+    scale: f32,
+    background: Option<&str>,
+) -> PyResult<String> {
+    let opts = render_options(width, height, scale, background)?;
+    let c = config(json)?;
+    Ok(py.detach(|| kittychart::render_svg(c, &opts)))
+}
+
 /// Render to raw RGBA: `(width, height, bytes)`.
 #[pyfunction]
 #[pyo3(signature = (json, width=800.0, height=None, scale=1.0, background=None))]
@@ -392,6 +408,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(render_png, m)?)?;
     m.add_function(wrap_pyfunction!(render_rgba, m)?)?;
+    m.add_function(wrap_pyfunction!(render_svg, m)?)?;
     m.add_function(wrap_pyfunction!(render_text, m)?)?;
     m.add_function(wrap_pyfunction!(probe, m)?)?;
     m.add_function(wrap_pyfunction!(window_size, m)?)?;

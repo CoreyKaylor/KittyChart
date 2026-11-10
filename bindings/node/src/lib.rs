@@ -88,6 +88,13 @@ pub struct RgbaImage {
     pub data: Buffer,
 }
 
+/// Render to an SVG document (text as outlines, no fonts needed).
+#[napi]
+pub fn render_svg(json: String, opts: Option<RenderOpts>) -> Result<String> {
+    let r = render_options(&opts.unwrap_or_default())?;
+    Ok(kittychart::render_svg(config(&json)?, &r))
+}
+
 /// Render to raw RGBA pixels.
 #[napi]
 pub fn render_rgba(json: String, opts: Option<RenderOpts>) -> Result<RgbaImage> {

@@ -11,6 +11,20 @@ theme.
 
 **[Gallery](gallery.md)**: every test fixture, on a white page and in a dark terminal.
 
+## Beyond plain JSON
+
+- **Scriptable options:** wherever Chart.js accepts a function, put the marker
+  `{"__kc_fn": "name"}` and register the function. In Rust that's `ChartConfig::with_fn("name", |ctx| …)`.
+  The function gets Chart.js's context object (`type`, `datasetIndex`, `dataIndex`, `raw`,
+  `parsed`, `chart.chartArea` …). `ticks.callback` gets `(value, index, ticks)` as `__args`.
+- **Gradients** work in plain JSON wherever a color goes:
+  `{"type": "linear", "x0": 0, "y0": "bottom", "x1": 0, "y1": "top", "stops": [[0, "#36a2eb00"], [1, "#36a2eb"]]}`.
+  Radial and conic work too, and coordinates may be chart-area keywords (`left`, `top`, `centerX` …).
+- **Line segment styles:** `segment: { borderColor, borderDash, borderWidth, backgroundColor … }`,
+  static or scriptable, with a `segment` context (`p0`, `p1`, `p0DataIndex` …).
+- **SVG:** `kittychart chart.json --out chart.svg`, `render_svg()`, `to_svg()`, `toSvg()` or
+  `kc_render_svg()`. Text is drawn as outlines, so the file needs no fonts.
+
 ## Command line
 
 ```sh

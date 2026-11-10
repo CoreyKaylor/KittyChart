@@ -135,6 +135,8 @@ pub struct Scale {
     pub ticks: Vec<Tick>,
     pub label_rotation: f64,
     label_sizes: std::cell::RefCell<Option<LabelSizes>>,
+    /// Calls scriptable options (see [`crate::script`]).
+    pub script: Option<crate::script::Script>,
     pub labels: Vec<Label>,
     /// Number of visible datasets bound to this scale (for `display: 'auto'`).
     pub visible_datasets: usize,
@@ -183,6 +185,7 @@ impl Scale {
             Some(l) => l.iter().map(Label::from_value).collect(),
             None => labels,
         };
+        drop(s);
         let mut scale = Scale {
             id: id.to_owned(),
             kind,
@@ -210,6 +213,7 @@ impl Scale {
             ticks: Vec::new(),
             label_rotation: 0.0,
             label_sizes: std::cell::RefCell::new(None),
+            script: None,
             labels,
             visible_datasets: 0,
             log_zero: false,
@@ -228,19 +232,72 @@ impl Scale {
             dpr: 1.0,
         };
         let s = Scopes::new([&scale.config]);
-        scale.user = UserBounds {
+        let user = UserBounds {
             min: s.get("min").and_then(|v| scale.parse(v, None)),
             max: s.get("max").and_then(|v| scale.parse(v, None)),
             suggested_min: s.get("suggestedMin").and_then(|v| scale.parse(v, None)),
             suggested_max: s.get("suggestedMax").and_then(|v| scale.parse(v, None)),
         };
+        drop(s);
+        scale.user = user;
         scale
     }
 
     // ---------------------------------------------------------------- options
 
     pub fn opts(&self) -> Scopes<'_> {
-        Scopes::new([&self.config])
+        Scopes::new([&self.config]).with_script(self.script_ctx())
+    }
+
+    /// The scale context (`type: "scale"`); indexable options get the tick context.
+    fn script_ctx(&self) -> Option<std::rc::Rc<crate::options::ScriptCtx<'_>>> {
+        let script = self.script.clone()?;
+        let base = self.scale_context();
+        let per_index = Box::new(move |i: usize| self.tick_context(i));
+        Some(std::rc::Rc::new(crate::options::ScriptCtx { script, base, per_index: Some(per_index) }))
+    }
+
+    fn scale_context(&self) -> Value {
+        serde_json::json!({
+            "type": "scale",
+            "scale": { "id": self.id, "axis": self.axis.as_str(), "min": self.min, "max": self.max },
+        })
+    }
+
+    fn tick_context(&self, i: usize) -> Value {
+        match self.ticks.get(i) {
+            Some(t) => serde_json::json!({
+                "type": "tick",
+                "index": i,
+                "tick": { "value": t.value, "label": label_json(&t.label), "major": t.major },
+            }),
+            None => serde_json::json!({ "index": i }),
+        }
+    }
+
+    /// `ticks.callback(value, index, ticks)`: replaces the default labels. A callback that
+    /// returns undefined hides the tick's label.
+    fn apply_tick_callback(&mut self) {
+        let (Some(script), Some(id)) = (self.script.clone(), self.ticks_opts().fn_id("callback")) else {
+            return;
+        };
+        let ticks: Vec<Value> = self
+            .ticks
+            .iter()
+            .map(|t| serde_json::json!({ "value": t.value, "label": label_json(&t.label), "major": t.major }))
+            .collect();
+        let ticks = Value::Array(ticks);
+        let labels: Vec<Label> = (0..self.ticks.len())
+            .map(|i| {
+                let mut ctx = self.tick_context(i);
+                ctx["scale"] = self.scale_context()["scale"].clone();
+                ctx["__args"] = serde_json::json!([self.ticks[i].value, i, ticks]);
+                script.call(&id, &ctx).map_or(Label::Text(String::new()), |v| Label::from_value(&v))
+            })
+            .collect();
+        for (t, l) in self.ticks.iter_mut().zip(labels) {
+            t.label = l;
+        }
     }
     fn ticks_opts(&self) -> Scopes<'_> {
         self.opts().child("ticks").then([&self.routes["ticks"]])
@@ -531,10 +588,14 @@ impl Scale {
 
         self.ticks = if self.kind.is_time() { self.build_time_ticks(c) } else { self.build_ticks() };
         self.generate_tick_labels();
+        self.apply_tick_callback();
         self.configure();
         self.calculate_label_rotation(c);
         let t = self.ticks_opts();
-        if t.bool_or("display", true) && (t.bool_or("autoSkip", true) || t.str("source") == Some("auto")) {
+        let skip =
+            t.bool_or("display", true) && (t.bool_or("autoSkip", true) || t.str("source") == Some("auto"));
+        drop(t);
+        if skip {
             self.ticks = self.auto_skip(c);
             self.label_sizes.replace(None);
         }
@@ -601,6 +662,7 @@ impl Scale {
         };
         let (rmin, rmax) = self.range.unwrap_or((self.min, self.max));
         let values = generate_ticks(&tg, rmin, rmax);
+        drop(t);
         if tg.bounds_ticks {
             for v in &values {
                 if !v.is_nan() {
@@ -870,8 +932,10 @@ impl Scale {
 
     fn calculate_padding(&mut self, first: Size, last: Size, sin: f64, cos: f64) {
         let t = self.ticks_opts();
-        let align = t.str("align").unwrap_or("center");
+        let align = t.str("align").unwrap_or("center").to_owned();
+        let align = align.as_str();
         let padding = t.num_or("padding", 3.0);
+        drop(t);
         let is_rotated = self.label_rotation != 0.0;
         let labels_below_ticks = self.position != Position::Top && self.axis == Axis::X;
         if self.is_horizontal() {
@@ -1913,6 +1977,13 @@ pub(crate) fn relative_label_size(value: f64, min_spacing: f64, o: &TickGen) -> 
     }
     let length = 0.75 * min_spacing * js_number_to_string(value).len() as f64;
     (min_spacing / ratio).min(length)
+}
+
+fn label_json(l: &Label) -> Value {
+    match l {
+        Label::Text(s) => Value::String(s.clone()),
+        Label::Lines(v) => Value::Array(v.iter().cloned().map(Value::String).collect()),
+    }
 }
 
 #[cfg(test)]

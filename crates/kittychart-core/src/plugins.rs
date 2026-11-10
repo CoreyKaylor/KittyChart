@@ -141,8 +141,8 @@ impl LayoutItem for TextBlock {
 #[derive(Debug, Clone)]
 pub struct LegendItem {
     pub text: Label,
-    pub fill_style: Option<Color>,
-    pub stroke_style: Option<Color>,
+    pub fill_style: Option<Paint>,
+    pub stroke_style: Option<Paint>,
     pub line_width: f64,
     pub line_cap: LineCap,
     pub line_join: LineJoin,
@@ -480,12 +480,12 @@ impl Legend {
         }
         let default = Color::rgba(0.4, 0.4, 0.4, 1.0);
         c.save();
-        c.set_fill_style(Paint::Solid(item.fill_style.unwrap_or(default)));
+        c.set_fill_style(item.fill_style.clone().unwrap_or(Paint::Solid(default)));
         c.set_line_cap(item.line_cap);
         c.set_line_dash_offset(item.line_dash_offset as f32);
         c.set_line_join(item.line_join);
         c.set_line_width(item.line_width as f32);
-        c.set_stroke_style(Paint::Solid(item.stroke_style.unwrap_or(default)));
+        c.set_stroke_style(item.stroke_style.clone().unwrap_or(Paint::Solid(default)));
         let dash: Vec<f32> = item.line_dash.iter().map(|d| *d as f32).collect();
         c.set_line_dash(&dash);
         if self.labels.use_point_style {
