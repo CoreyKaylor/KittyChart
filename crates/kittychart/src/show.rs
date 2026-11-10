@@ -23,7 +23,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use kittychart_canvas::cells::CellMode;
-#[cfg(any(unix, windows))]
 use kittychart_term::detect::Capabilities;
 #[cfg(any(unix, windows))]
 use kittychart_term::tty::{self, Tty};
@@ -145,8 +144,22 @@ pub struct TerminalInfo {
 impl TerminalInfo {
     #[cfg(any(unix, windows))]
     fn new(ws: tty::WindowSize, caps: Option<&Capabilities>) -> TerminalInfo {
-        let (cell_width, cell_height) = ws
-            .cell_px()
+        TerminalInfo::from_capabilities(ws.cols, ws.rows, ws.cell_px(), caps, tty::in_tmux())
+    }
+
+    /// From a sans-IO [`Detector`](kittychart_term::detect::Detector)'s result, for hosts that
+    /// talk to the terminal themselves (a browser terminal, a remote session). `cell_px` is the
+    /// cell size in device pixels when the host knows it; otherwise the terminal's own report
+    /// is used, then 10×20.
+    pub fn from_capabilities(
+        cols: u16,
+        rows: u16,
+        cell_px: Option<(u16, u16)>,
+        caps: Option<&Capabilities>,
+        tmux: bool,
+    ) -> TerminalInfo {
+        let (cell_width, cell_height) = cell_px
+            .filter(|(w, h)| *w > 0 && *h > 0)
             .or_else(|| caps.and_then(|c| c.cell_px).filter(|(w, h)| *w > 0 && *h > 0))
             .map_or((10.0, 20.0), |(w, h)| (f32::from(w), f32::from(h)));
         let colors = caps.and_then(|c| {
@@ -157,13 +170,13 @@ impl TerminalInfo {
             })
         });
         TerminalInfo {
-            cols: ws.cols,
-            rows: ws.rows,
+            cols,
+            rows,
             cell_width,
             cell_height,
             kitty: caps.is_some_and(|c| c.kitty_graphics),
             sixel: caps.is_some_and(|c| c.sixel),
-            tmux: tty::in_tmux(),
+            tmux,
             colors,
         }
     }
@@ -395,6 +408,10 @@ fn env_columns() -> Option<u16> {
 pub fn next_image_id() -> u32 {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    // There are no processes in a browser (`process::id` panics there).
+    #[cfg(target_arch = "wasm32")]
+    let base = 0x5A17_u32.wrapping_mul(2_654_435_761);
+    #[cfg(not(target_arch = "wasm32"))]
     let base = std::process::id().wrapping_mul(2_654_435_761);
     (base.wrapping_add(n.wrapping_mul(97)) & 0x00FF_FFFF).max(1)
 }

@@ -462,6 +462,27 @@ impl Chart {
         self.tooltip_event = event;
     }
 
+    /// The pointer is at `(x, y)` in chart CSS pixels, or left the chart (`None`): set the
+    /// active elements and the tooltip as Chart.js's event handling does (the `hover` and
+    /// `interaction` options pick what is active, the tooltip's own mode what it lists).
+    /// Returns whether anything visible changed (the next draw differs).
+    pub fn hover_at(&mut self, p: Option<(f64, f64)>) -> bool {
+        let (active, tooltip) = match p {
+            Some((x, y)) => (
+                self.elements_at(x, y, &self.hover_interaction()),
+                self.elements_at(x, y, &self.tooltip_interaction()),
+            ),
+            None => (vec![], vec![]),
+        };
+        let mut sorted = active.clone();
+        sorted.sort();
+        sorted.dedup();
+        let changed = sorted != self.active || tooltip != self.tooltip_active || self.tooltip_event != p;
+        self.set_active(active);
+        self.set_tooltip(tooltip, p);
+        changed
+    }
+
     /// `chart.getDataVisibility(index)`.
     pub fn data_visible(&self, index: usize) -> bool {
         !self.hidden_data.contains(&index)
@@ -2504,8 +2525,10 @@ fn apply_colors_plugin(config: &ChartConfig, theme: Option<&crate::theme::Theme>
         let i = color_index;
         color_index += 1;
         if let Some(obj) = ds.as_object_mut() {
+            // Areas behind lines stay translucent; fills that are the mark keep their contrast.
+            let area = matches!(kind, ChartType::Line | ChartType::Radar);
             let (border, fill) = match theme {
-                Some(t) => (t.border_color(i), t.fill_color(i)),
+                Some(t) => (t.border_color(i), if area { t.area_color(i) } else { t.fill_color(i) }),
                 None => (
                     BORDER_COLORS[i % BORDER_COLORS.len()].to_owned(),
                     BACKGROUND_COLORS[i % BACKGROUND_COLORS.len()].to_owned(),
@@ -2608,4 +2631,52 @@ fn set_border_skipped(
     mark(&parse_edge(&edge));
     bar.border_skipped = res;
     let _ = is_between;
+}
+
+#[cfg(test)]
+mod colors_tests {
+    use super::*;
+    use crate::theme::{AREA_ALPHA, TerminalColors, Theme, parse_hex};
+
+    fn tokyonight() -> Theme {
+        let h = |s| parse_hex(s).unwrap();
+        let pal = [
+            "#1a1b26", "#f7768e", "#9ece6a", "#e0af68", "#7aa2f7", "#ad8ee6", "#449dab", "#a9b1d6",
+            "#414868", "#ff7a93", "#b9f27c", "#ff9e64", "#7da6ff", "#bb9af7", "#0db9d7", "#c0caf5",
+        ]
+        .map(h);
+        Theme::from_terminal(&TerminalColors {
+            background: h("#1a1b26"),
+            foreground: h("#a9b1d6"),
+            palette: Some(pal),
+        })
+    }
+
+    fn alpha(v: &Value) -> f64 {
+        let s = v.as_str().unwrap();
+        s.trim_end_matches(')').rsplit(',').next().unwrap().trim().parse().unwrap()
+    }
+
+    /// Terminal-theme fills: bars keep their contrast-checked opacity, while the areas behind
+    /// lines (line and radar fills) stay as translucent as Chart.js's, so overlapping areas and
+    /// a radar's tick labels show through.
+    #[test]
+    fn theme_fills_behind_lines_stay_translucent() {
+        let t = tokyonight();
+        assert!(t.fill_alpha >= 0.8, "dark themes use opaque mark fills: {}", t.fill_alpha);
+        let mixed = ChartConfig::from_json(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]},{"type":"line","data":[2],"fill":true}]}}"#,
+        )
+        .unwrap();
+        let ds = apply_colors_plugin(&mixed, Some(&t));
+        assert_eq!(alpha(&ds[0]["backgroundColor"]), t.fill_alpha);
+        assert_eq!(alpha(&ds[1]["backgroundColor"]), AREA_ALPHA);
+        let radar = ChartConfig::from_json(
+            r#"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3],"fill":true},{"data":[3,2,1],"fill":true}]}}"#,
+        )
+        .unwrap();
+        for d in apply_colors_plugin(&radar, Some(&t)) {
+            assert_eq!(alpha(&d["backgroundColor"]), AREA_ALPHA);
+        }
+    }
 }

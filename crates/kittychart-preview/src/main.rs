@@ -328,7 +328,7 @@ fn paint(
     while let Some(row) = row_iter.next() {
         let mut cells = cell_it_owner.update(row).expect("cell iter");
         let mut x = 0u32;
-        let mut prev: Option<(u32, u32)> = None;
+        let mut prev: Option<(u32, u32, u32)> = None;
         while let Some(cell) = cells.next() {
             let (px, py) = (pad + (x * cw) as f32, pad + (y * ch) as f32);
             if let Ok(Some(bg)) = cell.bg_color() {
@@ -342,13 +342,16 @@ fn paint(
             if g.first() == Some(&kitty::PLACEHOLDER) {
                 // A Unicode placeholder: draw this cell's tile of the image its color names.
                 let fg = cell.fg_color().ok().flatten().unwrap_or(colors.foreground);
-                let id = (u32::from(fg.r) << 16) | (u32::from(fg.g) << 8) | u32::from(fg.b);
-                // Missing diacritics continue the previous placeholder cell (kitty spec).
+                // Missing diacritics continue the previous placeholder cell (kitty spec); the
+                // third one is the id's most significant byte.
                 let row =
                     g.get(1).and_then(|&d| kitty::diacritic_index(d)).or(prev.map(|p| p.0)).unwrap_or(0);
                 let col =
                     g.get(2).and_then(|&d| kitty::diacritic_index(d)).or(prev.map(|p| p.1 + 1)).unwrap_or(0);
-                prev = Some((row, col));
+                let msb =
+                    g.get(3).and_then(|&d| kitty::diacritic_index(d)).or(prev.map(|p| p.2)).unwrap_or(0);
+                prev = Some((row, col, msb));
+                let id = (msb << 24) | (u32::from(fg.r) << 16) | (u32::from(fg.g) << 8) | u32::from(fg.b);
                 let gr = t.kitty_graphics().expect("graphics");
                 if let Some(img) = gr.image(id) {
                     let (iw, ih) = (img.width().expect("w"), img.height().expect("h"));

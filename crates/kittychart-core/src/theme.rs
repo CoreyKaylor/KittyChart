@@ -62,6 +62,10 @@ const REFERENCE_LIGHT: [&str; 8] =
 const REFERENCE_DARK: [&str; 8] =
     ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 
+/// Alpha of area fills behind lines ([`Theme::area_color`]), the same as Chart.js's default
+/// background colors.
+pub const AREA_ALPHA: f64 = 0.5;
+
 /// ANSI hue families: (normal, bright) palette indices. Blue first, as Chart.js leads with blue.
 const FAMILIES: [(usize, usize); 6] = [(4, 12), (1, 9), (3, 11), (2, 10), (5, 13), (6, 14)];
 
@@ -139,9 +143,19 @@ impl Theme {
         css(self.series[i % self.series.len()])
     }
 
+    /// A fill that is itself the data mark (bars, bubbles, polar segments): opaque enough to
+    /// keep 3:1 contrast on the surface.
     pub fn fill_color(&self, i: usize) -> String {
         let [r, g, b] = self.series[i % self.series.len()];
         format!("rgba({r}, {g}, {b}, {})", self.fill_alpha)
+    }
+
+    /// A fill behind a line (line and radar areas, line points): the line carries the data, and
+    /// the area must let what it covers show through, overlapping areas and the scale's tick
+    /// labels. Chart.js's own translucency (its default backgrounds are 50% alpha).
+    pub fn area_color(&self, i: usize) -> String {
+        let [r, g, b] = self.series[i % self.series.len()];
+        format!("rgba({r}, {g}, {b}, {AREA_ALPHA})")
     }
 }
 

@@ -77,3 +77,31 @@ fn hit_testing_matches_chartjs() {
     );
     eprintln!("{checked} queries match Chart.js");
 }
+
+/// `Chart::hover_at` (what the viewer, the widgets and the browser demo call on pointer
+/// motion): the hover mode picks the active elements, the tooltip mode what the tooltip lists,
+/// and it reports a change only when the next draw would differ.
+#[test]
+fn hover_at_sets_active_and_tooltip() {
+    let json = r#"{"type":"bar","data":{"labels":["a","b","c"],"datasets":[
+        {"data":[3,5,2]},{"data":[4,1,6]}]},
+        "options":{"animation":false,"interaction":{"mode":"index","intersect":false},
+        "plugins":{"tooltip":{"mode":"nearest"}}}}"#;
+    let mut chart = Chart::new(ChartConfig::from_json(json).unwrap());
+    chart.draw(&mut SkiaCanvas::new(600.0, 400.0, 1.0));
+    // Over the middle category: index mode activates both datasets' "b" bars.
+    let x = 300.0;
+    assert!(chart.hover_at(Some((x, 200.0))));
+    let both = vec![ActiveElement { dataset: 0, index: 1 }, ActiveElement { dataset: 1, index: 1 }];
+    assert_eq!(chart.active(), both.as_slice());
+    let expected_tooltip = chart.elements_at(x, 200.0, &chart.tooltip_interaction());
+    assert_eq!(expected_tooltip.len(), 1, "nearest mode lists one element");
+    // The same position again: nothing changes.
+    assert!(!chart.hover_at(Some((x, 200.0))));
+    // A new position over the same elements still changes the tooltip anchor.
+    assert!(chart.hover_at(Some((x + 1.0, 200.0))));
+    // Leaving clears everything, once.
+    assert!(chart.hover_at(None));
+    assert!(chart.active().is_empty());
+    assert!(!chart.hover_at(None));
+}

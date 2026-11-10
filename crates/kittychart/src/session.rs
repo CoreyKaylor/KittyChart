@@ -234,20 +234,26 @@ impl Session {
         Some((rx / s, ry / s))
     }
 
+    /// Where chart position `(x, y)` (CSS pixels) is on the terminal, in device pixels from the
+    /// screen's top-left: the inverse of how pointer reports map to the chart. A pixel pointer
+    /// report (SGR mode 1016) at this position hovers that point.
+    pub fn to_terminal(&self, x: f64, y: f64) -> (u32, u32) {
+        let (cw, ch) = (f64::from(self.info.cell_width), f64::from(self.info.cell_height));
+        let (col, row) = (f64::from(self.region.col), f64::from(self.region.row));
+        let (px, py) = if matches!(self.mode, Mode::Text(_)) {
+            // Text charts are laid out in CELL_W×CELL_H "pixels" per cell.
+            ((x / f64::from(CELL_W) + col) * cw, (y / f64::from(CELL_H) + row) * ch)
+        } else {
+            let s = f64::from(self.scale);
+            (x * s + col * cw, y * s + row * ch)
+        };
+        (px.max(0.0).round() as u32, py.max(0.0).round() as u32)
+    }
+
     /// Hover at chart position `p` (or nowhere): active elements and tooltip, as Chart.js's
     /// event handling sets them.
     fn hover(&mut self, p: Option<(f64, f64)>) -> bool {
-        let (active, tooltip) = match p {
-            Some((x, y)) => {
-                let a = self.chart.elements_at(x, y, &self.chart.hover_interaction());
-                let t = self.chart.elements_at(x, y, &self.chart.tooltip_interaction());
-                (a, t)
-            }
-            None => (vec![], vec![]),
-        };
-        let changed = active != self.chart.active() || self.pointer != p;
-        self.chart.set_active(active);
-        self.chart.set_tooltip(tooltip, p);
+        let changed = self.chart.hover_at(p) || self.pointer != p;
         self.pointer = p;
         changed
     }
@@ -556,6 +562,22 @@ mod tests {
             mods: Mods::default(),
             pixels: true,
         })
+    }
+
+    #[test]
+    fn to_terminal_inverts_pointer_reports() {
+        for mode in [Mode::Kitty, Mode::Text(CellMode::Braille)] {
+            let mut s = session(mode);
+            s.frame(0.0);
+            for (x, y) in [(120.0, 80.0), (333.0, 211.0)] {
+                let (px, py) = s.to_terminal(x, y);
+                s.handle(&mouse(px, py));
+                let (cx, cy) = s.pointer.expect("pointer inside the chart");
+                // Rounding to whole device pixels moves the point by at most one of them.
+                let tol = if matches!(mode, Mode::Text(_)) { 1.0 } else { 1.0 / f64::from(s.scale) };
+                assert!((cx - x).abs() <= tol && (cy - y).abs() <= tol, "{mode:?}: {x},{y} -> {cx},{cy}");
+            }
+        }
     }
 
     #[test]
