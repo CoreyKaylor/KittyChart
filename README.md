@@ -1,124 +1,180 @@
 # KittyChart
 
-Chart.js-class charts for graphics-capable terminals (kitty, Ghostty and other libghostty
-terminals, WezTerm, …), from a Rust core with Python, Node and C bindings.
+[![CI](https://github.com/CoreyKaylor/KittyChart/actions/workflows/ci.yml/badge.svg)](https://github.com/CoreyKaylor/KittyChart/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-> Status: **v2 (interactivity)**: line, bar, scatter, bubble, pie, doughnut, radar and polar area
-> charts; category, linear, logarithmic, time, timeseries and radial scales; stacking, floating
-> and horizontal bars; area fills; decimation; title/subtitle/legend; terminal-native colors.
-> Output via kitty graphics (direct or Unicode placeholders, tmux passthrough), sixel, or text
-> (block and Braille characters), or PNG and SVG. Scriptable options, gradients and segment
-> styles; hover, tooltips, legend toggles and animations in an interactive viewer and the TUI
-> widgets. Bindings: Python (numpy/pandas/polars, Rich, Textual, IPython/Jupyter),
-> Node.js/Bun/Deno, C, and a ratatui widget. Docs: [docs/](docs/index.md), with a
-> [gallery](docs/gallery.md).
+Chart.js charts in your terminal. KittyChart is a Rust port of Chart.js: give it a Chart.js
+config (`{ type, data, options }`) and it draws the chart in the terminal, or renders it to PNG
+or SVG. It has bindings for Python, Node.js (also Bun and Deno) and C, plus a ratatui widget.
 
-```python
-import kittychart                                   # pip install kittychart
-kittychart.Chart(type="bar", data={"labels": ["Q1", "Q2"], "datasets": [{"label": "Revenue", "data": [12, 19]}]}).show()
-```
+[![The same chart drawn by KittyChart into a browser canvas (left) and inside a terminal (right), with the hover tooltip mirrored between them](docs/images/demo.png)](https://coreykaylor.github.io/KittyChart/)
 
-```js
-const { Chart } = require('kittychart')            // npm install kittychart
-new Chart({ type: 'line', data: { labels: ['a', 'b'], datasets: [{ label: 'x', data: [1, 3] }] } }).show()
-```
+**[Live demo](https://coreykaylor.github.io/KittyChart/)**: KittyChart compiled to WebAssembly,
+drawing into a browser canvas and into a real terminal emulator side by side.
+
+## Features
+
+- **Chart types:** line, bar (grouped, stacked, floating, horizontal), scatter, bubble, pie,
+  doughnut, radar, polar area, and mixed charts.
+- **Scales:** category, linear, logarithmic, time, timeseries and radial.
+- **Plugins:** title, subtitle, legend, tooltip, filler (area fills), decimation and colors.
+- **Chart.js options:** defaults, option cascading, scriptable options, gradients and line
+  segment styles.
+- **Terminal output:** kitty graphics (direct or Unicode placeholders, so it works in tmux),
+  sixel, or block and Braille text when the terminal has no graphics. The protocol is detected
+  automatically.
+- **Theme colors:** default colors come from your terminal's theme.
+- **Interactive viewer:** hover tooltips, legend toggles, keyboard navigation, animations, and
+  live reload when the file changes.
+- **Files:** PNG and SVG, with fonts built in. No browser, Node or system fonts needed.
+
+| Output | Terminals |
+|---|---|
+| kitty graphics | kitty, Ghostty, WezTerm, Konsole, and tmux with `allow-passthrough on` |
+| sixel | foot, xterm, mlterm, Windows Terminal |
+| block and Braille text | any terminal |
+
+## Install
 
 ```sh
-cargo run -p kittychart-cli -- tests/fixtures/line/basic.json          # draw in kitty / Ghostty
-cargo run -p kittychart-cli -- chart.json --out chart.png --scale 2   # or render a PNG
-echo '{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[3,5]}]}}' | cargo run -p kittychart-cli
-cargo run -p kittychart-cli -- chart.json --protocol text             # no graphics? block + Braille text
-cargo run -p kittychart-cli -- view chart.json --watch                # interactive: hover, legend clicks, live file
+pip install kittychart          # Python
+npm install kittychart          # Node.js, Bun, Deno
+cargo install kittychart-cli    # the `kittychart` command
+cargo add kittychart            # Rust library
 ```
 
-`--protocol auto` (the default, or `$KITTYCHART_PROTOCOL`) asks the terminal what it supports
-and picks kitty graphics, then sixel, then text. Inside tmux, kitty images go through
-passthrough as Unicode placeholders, so tmux keeps them in their pane (needs
-`set -g allow-passthrough on`). In text mode, labels are real characters, regions (bars,
-areas, slices) are quadrant blocks and lines are Braille.
+Prebuilt CLI and C library archives for Linux, macOS and Windows are attached to each
+[release](https://github.com/CoreyKaylor/KittyChart/releases).
 
-Any Chart.js config works as input: `{ type, data, options }`, with Chart.js's defaults, option
-cascading, colors plugin palette and layout rules.
+## Quick start
+
+### Command line
+
+```sh
+kittychart chart.json                     # draw at the cursor
+kittychart view chart.json --watch        # full-screen and interactive; follows the file
+kittychart chart.json --out chart.png     # or chart.svg
+cat chart.json | kittychart --protocol braille --cols 80
+```
+
+### Python
+
+```python
+import kittychart
+
+chart = kittychart.Chart(
+    type="line",
+    data={
+        "labels": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+        "datasets": [{"label": "Requests", "data": [120, 190, 170, 250, 210], "fill": True}],
+    },
+)
+chart.show()                  # draw at the cursor
+chart.interact()              # explore it full-screen
+chart.save("chart.png")       # or .svg
+```
+
+numpy arrays, pandas and polars data go straight into `data`, and charts work in Rich,
+Textual and Jupyter. See the [Python docs](bindings/python/README.md).
+
+### Node.js
+
+```js
+const { Chart } = require('kittychart')
+
+new Chart({
+  type: 'bar',
+  data: { labels: ['Q1', 'Q2', 'Q3', 'Q4'], datasets: [{ label: 'Revenue', data: [12, 19, 7, 15] }] },
+}).show()
+```
+
+The typings accept Chart.js's own `ChartConfiguration`, so existing configs carry over. See the
+[Node docs](bindings/node/README.md).
+
+### Rust
+
+```rust
+use kittychart::{ChartConfig, show::{show, ShowOptions}};
+
+let config = ChartConfig::from_json(r#"{
+    "type": "bar",
+    "data": { "labels": ["Q1", "Q2", "Q3"], "datasets": [{ "label": "Revenue", "data": [12, 19, 7] }] }
+}"#)?;
+show(config.clone(), &ShowOptions::default())?;                         // draw at the cursor
+let png = kittychart::render(config, &kittychart::RenderOptions::new(800.0)).to_png();
+```
+
+`kittychart-ratatui` provides a widget for ratatui apps, with hover and tooltips.
+
+### C
+
+A C ABI with a generated header (`include/kittychart.h`): see the [C docs](docs/c.md).
+
+## Examples
+
+| | |
+|---|---|
+| ![Stacked area chart](docs/gallery/fill-stacked_area-dark.png) | ![Line chart with a gradient fill](docs/gallery/gradient-area_linear-dark.png) |
+| ![Stacked bars with negative values](docs/gallery/bar-stacked-dark.png) | ![Doughnut chart with a tooltip](docs/gallery/tooltip-doughnut-dark.png) |
+
+Without terminal graphics, the same config draws as text: regions become block characters and
+lines become Braille.
+
+![A line chart drawn with Braille characters in a terminal](docs/images/braille.png)
+
+The [gallery](docs/gallery.md) shows every test chart, both with Chart.js's colors on a white
+page and with theme colors in a dark terminal.
+
+## Interactive viewer
+
+`kittychart view chart.json`, `chart.interact()` in Python and `interact()` in Node open the
+chart full-screen:
+
+| Key | |
+|---|---|
+| mouse | hover for tooltips; click legend items to toggle them |
+| `←` `→` `Home` `End` | step through the data points |
+| `1`–`9` | toggle a dataset (a slice on pie, doughnut and polar charts) |
+| `l` | show or hide the legend |
+| `r` | replay the animation |
+| `s` | save a PNG |
+| `q`, `Esc` | quit |
+
+## Documentation
+
+- [Overview and CLI reference](docs/index.md)
+- [Python](bindings/python/README.md), [Node.js](bindings/node/README.md), [C](docs/c.md)
+- [Gallery](docs/gallery.md)
 
 ## Workspace
 
 | Crate | Purpose |
 |---|---|
-| `kittychart` | Facade: `render(config, opts) → RGBA/PNG`; `show` detects the terminal and draws (shared by the CLI and every binding) |
-| `kittychart-core` | Chart.js port: config, option resolution, scales, layout, controllers, plugins |
+| `kittychart` | The library: `render` to RGBA, PNG or SVG; `show` detects the terminal and draws |
+| `kittychart-core` | The Chart.js port: config, options, scales, layout, controllers, plugins |
+| `kittychart-canvas` | Canvas2D-style drawing on tiny-skia, with cosmic-text and bundled Inter |
+| `kittychart-term` | kitty and sixel encoders, capability detection, mouse and key input parser |
 | `kittychart-cli` | The `kittychart` command |
-| `kittychart-ratatui` | ratatui widget: kitty graphics through Unicode placeholders, or text cells |
-| `kittychart-ffi` | C ABI and generated header (`include/kittychart.h`): see [docs/c.md](docs/c.md) |
-| `bindings/python` | The `kittychart` Python package (PyO3, abi3 wheels): numpy/pandas/polars, Rich, Textual, IPython |
-| `bindings/node` | The `kittychart` npm package (napi-rs): Node.js, Bun, Deno; typings compatible with Chart.js |
-| `kittychart-canvas` | Canvas2D-shaped drawing API: tiny-skia raster, cosmic-text shaping, bundled Inter |
-| `kittychart-term` | Sans-IO kitty (incl. placeholders, tmux, temp-file/shm media) and sixel encoders, capability `Detector`, input parser (SGR mouse, keys), a small terminal adapter (`/dev/tty`; Windows console, unverified) |
-| `kittychart-testkit` | Independent kitty and sixel decoders, golden-image assertions (test-only) |
-| `kittychart-conformance` | Tests against reference implementations: Ghostty's VT core (`libghostty-vt`, needs Zig), libsixel, tmux; and end-to-end runs of the CLI, the C, Python and Node bindings, Rich, Textual, IPython and ratatui on a PTY |
+| `kittychart-ratatui` | ratatui widget |
+| `kittychart-ffi` | C ABI and header |
+| `kittychart-wasm` | WebAssembly build used by the demo site |
+| `bindings/python`, `bindings/node` | Python (PyO3) and Node (napi-rs) packages |
 
 ## Development
 
 ```sh
-mise install        # pinned toolchain: zig, just, nextest, insta, node, uv
-just test           # L0–L2: unit, golden images, protocol round-trips (no Zig needed)
-just test-all       # + L3 Ghostty conformance and end-to-end (builds the Python and Node packages)
-just test-bindings  # L5: pytest and node:test + tsc
-just python-dev     # build the Python package into bindings/python/.venv
-just node-dev       # build the Node native module
-just header         # regenerate the C header
-just gallery        # regenerate docs/gallery
-just dist           # release builds: CLI + C library, Python wheel, Node module
-just bless          # accept changed goldens/snapshots (review target/kc-diffs/ first)
-just ci             # fmt + clippy + test-all, as CI runs them
-just parity         # render fixtures with real Chart.js (headless Chromium) and diff them
-just preview FILE…  # screenshot charts inside simulated terminals across themes → target/preview/sheet.png
+mise install        # pinned toolchain: zig, just, nextest, node, uv, mdbook
+just test           # unit, golden image and protocol tests
+just test-all       # + conformance against Ghostty's VT core, libsixel and tmux, and end-to-end runs
+just test-bindings  # Python and Node tests
+just ci             # everything CI runs
+just parity         # compare every fixture against Chart.js 4.6.1 in headless Chromium
+just preview FILE   # screenshot charts inside simulated terminals across themes
+just web-serve      # build the demo site and docs, then serve them on 127.0.0.1:8766
 ```
 
-`just preview` is the look-and-feel check. It replays the real CLI session (prompt, capability
-and theme detection, kitty graphics) inside Ghostty's VT core for several terminal themes, then
-paints each terminal's screen into one contact sheet. `--theme` takes built-in names or a Ghostty
-theme file, so you can preview against your own theme. `--protocol` previews the other outputs:
-`placeholders`, `sixel` (decoded by the testkit, since Ghostty has no sixel), and the text modes
-`auto`, `blocks`, `half`, `braille`.
-
-`--exec` runs any real program on a PTY attached to the simulated terminal and screenshots it,
-e.g. `just preview --exec "target/debug/kittychart chart.json"`, the ratatui example
-(`--exec target/debug/examples/dashboard --keys 2000:q`), or either inside tmux.
-`--no-graphics` simulates a terminal without kitty graphics, and `--dump-images DIR` saves the
-images the terminal stored.
-
-Golden fixtures live in `tests/fixtures/**.json` (Chart.js configs, plus an optional
-`"_kc": {width, height, dpr, background}`). Each is checked against `tests/goldens/`, and
-`just parity` scores it against Chart.js 4.6.1 running in Chromium.
-
-The test layers and the reasoning behind them:
-
-- **Sans-IO**: no library code touches a TTY, env var, clock or system font. Detection is a byte-in,
-  capabilities-out state machine, so tests drive it with byte slices or with a real emulator.
-- **Goldens** live in `tests/goldens/`. Identical bytes pass immediately. Otherwise a DSSIM
-  tolerance absorbs cross-architecture anti-aliasing noise. Failures write
-  `actual/expected/diff.png` to `target/kc-diffs/`.
-- **Independent checks of protocol output**: our own spec-based decoders (L2), then reference
-  implementations (L3): Ghostty's actual parser and image store running in-process, and
-  libsixel's decoder (`sixel2png`). No terminal window or permissions.
-- **End to end** (L3): the real `kittychart` binary, a C program, Python (plain, Rich, Textual,
-  IPython), Node, the ratatui example, and tmux, each run on a PTY whose other end is Ghostty's
-  VT core, which answers their queries. This covers the TTY
-  adapter, detection, protocol choice, cursor placement and tmux passthrough. The conformance
-  lane needs Zig, `sixel2png` (libsixel) and tmux.
-
-## Releases
-
-Pushing a `v*` tag runs `.github/workflows/release.yml`:
-- the CLI and C library are built for Linux (x64, arm64), macOS (x64, arm64) and Windows, and
-  attached to a GitHub release;
-- abi3 wheels (manylinux, musllinux, macOS, Windows) and an sdist go to PyPI by trusted
-  publishing;
-- the npm package goes out with one prebuilt native package per platform (including musl
-  Linux, cross-built with zig and tested in an Alpine container).
-
-Bump the version in `Cargo.toml` and `bindings/node/package.json` first. `docs/` is published to
-GitHub Pages by `.github/workflows/pages.yml`.
+Golden fixtures are Chart.js configs in `tests/fixtures/`. Each one is checked against
+`tests/goldens/` and scored against real Chart.js output by `just parity`.
 
 ## License
 
