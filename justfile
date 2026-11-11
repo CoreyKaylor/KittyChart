@@ -78,8 +78,12 @@ header:
 gallery:
     cargo run --quiet --release -p kittychart --example gallery
 
+# The Python and Node packages ship the root LICENSE and THIRD-PARTY-NOTICES: copy them in.
+licenses:
+    for d in bindings/python bindings/node; do cp LICENSE THIRD-PARTY-NOTICES "$d/"; done
+
 # Release builds of every distributable, locally: CLI + C library, Python wheel, Node module.
-dist:
+dist: licenses
     cargo build --release -p kittychart-cli -p kittychart-ffi
     cd bindings/python && uvx maturin build --release --out dist
     cd bindings/node && npm ci --no-audit --no-fund && npm run build

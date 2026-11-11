@@ -41,7 +41,7 @@ jobs:
           name="kittychart-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "$name/lib" "$name/include"
           cp crates/kittychart-ffi/include/kittychart.h "$name/include/"
-          cp README.md LICENSE-MIT LICENSE-APACHE "$name/"
+          cp README.md LICENSE THIRD-PARTY-NOTICES "$name/"
           cd target/release
           if [ "$RUNNER_OS" = Windows ]; then
             cp kittychart.exe "../../$name/"
@@ -74,6 +74,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: License files into the package
+        shell: bash
+        run: cp LICENSE THIRD-PARTY-NOTICES bindings/python/
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -99,6 +102,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: License files into the package
+        shell: bash
+        run: cp LICENSE THIRD-PARTY-NOTICES bindings/python/
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -183,10 +189,15 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm ci --no-audit --no-fund
+          cp ../../LICENSE ../../THIRD-PARTY-NOTICES .
           cp ../../artifacts/node-x86_64-unknown-linux-gnu/binding.js ../../artifacts/node-x86_64-unknown-linux-gnu/binding.d.ts .
           mkdir -p modules && cp ../../artifacts/node-*/*.node modules/
           npx napi create-npm-dirs
           npx napi artifacts --output-dir modules
           npx napi pre-publish -t npm --skip-optional-publish
+          for dir in npm/*/; do
+            cp LICENSE THIRD-PARTY-NOTICES "$dir"
+            (cd "$dir" && node -e "const f=require('fs'),p=JSON.parse(f.readFileSync('package.json'));p.files=[...(p.files||[]),'THIRD-PARTY-NOTICES'];f.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')")
+          done
           for dir in npm/*/; do (cd "$dir" && npm publish --provenance --access public); done
           npm publish --provenance --access public

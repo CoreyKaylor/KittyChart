@@ -2,7 +2,7 @@
   "name": "kittychart",
   "version": "0.0.1",
   "description": "Chart.js-compatible charts for graphics-capable terminals (kitty, Ghostty, WezTerm, foot \u2026)",
-  "license": "MIT OR Apache-2.0",
+  "license": "MIT",
   "keywords": [
     "chart",
     "terminal",
@@ -25,7 +25,8 @@
     "index.js",
     "index.d.ts",
     "binding.js",
-    "binding.d.ts"
+    "binding.d.ts",
+    "THIRD-PARTY-NOTICES"
   ],
   "engines": {
     "node": ">= 18"

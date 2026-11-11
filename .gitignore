@@ -10,3 +10,8 @@ __pycache__/
 /bindings/node/binding.js
 /bindings/node/binding.d.ts
 /bindings/python/dist/
+# Copies of the root license files, made by `just licenses` and the release workflow
+/bindings/python/LICENSE
+/bindings/python/THIRD-PARTY-NOTICES
+/bindings/node/LICENSE
+/bindings/node/THIRD-PARTY-NOTICES

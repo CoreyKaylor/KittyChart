@@ -1,14 +1,14 @@
 name: CI
 
 # Changes that can't affect a build or test skip CI: the docs (Pages builds them), Markdown,
-# licenses, the demo site (web/, built and smoke-tested by the Pages workflow) and the
+# the licenses, the demo site (web/, built and smoke-tested by the Pages workflow) and the
 # reference/replay tools (used by `just parity` and by hand). Keep both lists in sync.
 on:
   push:
     branches: [main]
-    paths-ignore: ["docs/**", "**/*.md", "LICENSE-*", "web/**", "tools/**"]
+    paths-ignore: ["docs/**", "**/*.md", "LICENSE", "THIRD-PARTY-NOTICES", "web/**", "tools/**"]
   pull_request:
-    paths-ignore: ["docs/**", "**/*.md", "LICENSE-*", "web/**", "tools/**"]
+    paths-ignore: ["docs/**", "**/*.md", "LICENSE", "THIRD-PARTY-NOTICES", "web/**", "tools/**"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

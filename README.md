@@ -1,7 +1,7 @@
 # KittyChart
 
 [![CI](https://github.com/CoreyKaylor/KittyChart/actions/workflows/ci.yml/badge.svg)](https://github.com/CoreyKaylor/KittyChart/actions/workflows/ci.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Chart.js charts in your terminal. KittyChart is a Rust port of Chart.js: give it a Chart.js
 config (`{ type, data, options }`) and it draws the chart in the terminal, or renders it to PNG
@@ -178,4 +178,4 @@ Golden fixtures are Chart.js configs in `tests/fixtures/`. Each one is checked a
 
 ## License
 
-MIT OR Apache-2.0
+[MIT](LICENSE). KittyChart is a port of Chart.js (MIT) and embeds the Inter font (SIL OFL 1.1); see [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
