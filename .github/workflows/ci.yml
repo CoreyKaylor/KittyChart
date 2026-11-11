@@ -71,17 +71,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { key: libghostty }
       # libsixel's decoder checks the sixel encoder independently of our own decoder; tmux is
-      # the multiplexer in the end-to-end tests. The libsixel packages are cached, and fetched
-      # from Ubuntu's own servers when they aren't: the runners' Azure mirror is at times
-      # unreachable. Their dependencies and tmux come with the runner image.
+      # the multiplexer in the end-to-end tests. libsixel's two packages are pinned by hash (from
+      # Ubuntu noble's package index) and cached; on a miss they come from the kernel.org mirror,
+      # then Ubuntu's own archive, since the runners' Azure mirror is at times unreachable.
+      # Their dependencies and tmux come with the runner image.
       - uses: actions/cache@v4
         id: debs
         with: { path: ~/debs, key: debs-noble-libsixel-1.10.3-3build1 }
       - if: steps.debs.outputs.cache-hit != 'true'
         run: |
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update -o Acquire::Retries=3
-          mkdir -p ~/debs && cd ~/debs && apt-get download -o Acquire::Retries=3 libsixel1 libsixel-bin
+          mkdir -p ~/debs && cd ~/debs
+          pool=pool/universe/libs/libsixel
+          for f in libsixel1_1.10.3-3build1_amd64.deb libsixel-bin_1.10.3-3build1_amd64.deb; do
+            curl -fsSL --retry 3 -o "$f" "https://mirrors.edge.kernel.org/ubuntu/$pool/$f" ||
+              curl -fsSL --retry 3 -o "$f" "http://archive.ubuntu.com/ubuntu/$pool/$f"
+          done
+          sha256sum -c <<'SUMS'
+          4340648a13a2ff8debe759ca7c94beb38fe739ea83402a193b82958824f053de  libsixel1_1.10.3-3build1_amd64.deb
+          9cac2270de1afc2214190f9373aa60dd11a522d62ca545e06c963bcbf7fbee8d  libsixel-bin_1.10.3-3build1_amd64.deb
+          SUMS
       - run: |
           sudo dpkg -i ~/debs/*.deb
           command -v tmux || sudo apt-get install -y tmux
