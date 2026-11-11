@@ -6,7 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-include = ["src/**/*", "fonts/**/*", "Cargo.toml"]
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+include = ["src/**/*", "fonts/**/*", "Cargo.toml", "LICENSE", "THIRD-PARTY-NOTICES"]
 
 [dependencies]
 tiny-skia = { workspace = true, default-features = false, features = ["std", "simd"] }

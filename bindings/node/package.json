@@ -3,6 +3,12 @@
   "version": "0.0.1",
   "description": "Chart.js-compatible charts for graphics-capable terminals (kitty, Ghostty, WezTerm, foot \u2026)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CoreyKaylor/KittyChart.git",
+    "directory": "bindings/node"
+  },
+  "homepage": "https://coreykaylor.github.io/KittyChart/",
   "keywords": [
     "chart",
     "terminal",

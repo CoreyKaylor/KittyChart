@@ -1,10 +1,13 @@
 name: Release
 
-# Push a tag like v0.1.0 (with versions bumped in Cargo.toml, bindings/node/package.json) to
-# build every distributable and publish it:
+# Push a tag like v0.1.0 (with versions bumped in Cargo.toml, both workspace.package.version and
+# the internal crates' versions under workspace.dependencies, and in bindings/node/package.json)
+# to build every distributable and publish it:
 #   - GitHub release: the `kittychart` CLI and the C library (header, static + shared) per platform
+#   - crates.io: kittychart, kittychart-cli, kittychart-ratatui, kittychart-ffi and the crates
+#     they depend on
 #   - PyPI: abi3 wheels (one per platform, Python ≥ 3.9) + sdist, via trusted publishing
-#   - npm: `kittychart` plus one prebuilt native package per platform, with provenance
+#   - npm: `kittychart` plus one prebuilt native package per platform, via trusted publishing
 # Run it by hand (workflow_dispatch) to build everything without publishing.
 
 on:
@@ -161,18 +164,44 @@ jobs:
             bindings/node/binding.js
             bindings/node/binding.d.ts
 
+  # Packages every published crate and builds it from the package, as crates.io will see it.
+  crates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: License files into the crates
+        run: for d in crates/kittychart crates/kittychart-{canvas,term,core,cli,ratatui,ffi}; do cp LICENSE THIRD-PARTY-NOTICES "$d/"; done
+      # --allow-dirty: the license copies above are not committed.
+      - run: cargo publish --workspace --dry-run --locked --allow-dirty
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [cli, wheels, sdist, node]
+    needs: [cli, wheels, sdist, node, crates]
     runs-on: ubuntu-24.04
     environment: release
     permissions:
       contents: write # GitHub release
-      id-token: write # PyPI trusted publishing, npm provenance
+      id-token: write # trusted publishing: PyPI, npm
     steps:
       - uses: actions/checkout@v4
+      - name: Versions match the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          node=$(node -p "require('./bindings/node/package.json').version")
+          deps=$(grep -c "^kittychart.*version = \"$tag\"" Cargo.toml)
+          echo "tag $tag, Cargo.toml $cargo, package.json $node, $deps/5 internal crate versions"
+          [ "$tag" = "$cargo" ] && [ "$tag" = "$node" ] && [ "$deps" = 5 ]
       - uses: actions/download-artifact@v4
         with: { path: artifacts }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for d in crates/kittychart crates/kittychart-{canvas,term,core,cli,ratatui,ffi}; do cp LICENSE THIRD-PARTY-NOTICES "$d/"; done
+          cargo publish --workspace --locked --allow-dirty
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -181,13 +210,15 @@ jobs:
         run: mkdir -p pydist && cp artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz pydist/
       - uses: pypa/gh-action-pypi-publish@release/v1
         with: { packages-dir: pydist }
+      # npm trusted publishing: each of the eight packages (kittychart and its seven platform
+      # packages) trusts this workflow and the `release` environment, so no token is needed.
+      # Provenance is added automatically. It needs npm 11.5.1 or later.
       - uses: actions/setup-node@v4
-        with: { node-version: 22, registry-url: "https://registry.npmjs.org" }
+        with: { node-version: 24, registry-url: "https://registry.npmjs.org" }
       - name: npm
         working-directory: bindings/node
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          npm install -g npm@11
           npm ci --no-audit --no-fund
           cp ../../LICENSE ../../THIRD-PARTY-NOTICES .
           cp ../../artifacts/node-x86_64-unknown-linux-gnu/binding.js ../../artifacts/node-x86_64-unknown-linux-gnu/binding.d.ts .
@@ -199,5 +230,5 @@ jobs:
             cp LICENSE THIRD-PARTY-NOTICES "$dir"
             (cd "$dir" && node -e "const f=require('fs'),p=JSON.parse(f.readFileSync('package.json'));p.files=[...(p.files||[]),'THIRD-PARTY-NOTICES'];f.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')")
           done
-          for dir in npm/*/; do (cd "$dir" && npm publish --provenance --access public); done
-          npm publish --provenance --access public
+          for dir in npm/*/; do (cd "$dir" && npm publish --access public); done
+          npm publish --access public

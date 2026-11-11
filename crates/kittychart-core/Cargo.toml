@@ -6,6 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+include = ["src/**/*", "Cargo.toml", "LICENSE", "THIRD-PARTY-NOTICES"]
 
 [dependencies]
 kittychart-canvas = { workspace = true }

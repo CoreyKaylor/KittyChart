@@ -21,14 +21,19 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 authors = ["Corey Kaylor <corey@kaylors.net>"]
+repository = "https://github.com/CoreyKaylor/KittyChart"
+homepage = "https://coreykaylor.github.io/KittyChart/"
+keywords = ["chart", "terminal", "kitty", "chartjs", "plot"]
+categories = ["visualization", "command-line-utilities"]
 
 [workspace.dependencies]
-kittychart-canvas = { path = "crates/kittychart-canvas" }
-kittychart-term = { path = "crates/kittychart-term" }
+# Published crates need a version beside the path: keep it equal to workspace.package.version.
+kittychart-canvas = { path = "crates/kittychart-canvas", version = "0.0.1" }
+kittychart-term = { path = "crates/kittychart-term", version = "0.0.1" }
 kittychart-testkit = { path = "crates/kittychart-testkit" }
-kittychart-core = { path = "crates/kittychart-core" }
-kittychart = { path = "crates/kittychart" }
-kittychart-ratatui = { path = "crates/kittychart-ratatui" }
+kittychart-core = { path = "crates/kittychart-core", version = "0.0.1" }
+kittychart = { path = "crates/kittychart", version = "0.0.1" }
+kittychart-ratatui = { path = "crates/kittychart-ratatui", version = "0.0.1" }
 
 tiny-skia = "0.12.0"
 cosmic-text = { version = "0.19.0", default-features = false, features = ["std"] }

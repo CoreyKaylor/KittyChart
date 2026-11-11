@@ -15,3 +15,5 @@ __pycache__/
 /bindings/python/THIRD-PARTY-NOTICES
 /bindings/node/LICENSE
 /bindings/node/THIRD-PARTY-NOTICES
+/crates/*/LICENSE
+/crates/*/THIRD-PARTY-NOTICES
