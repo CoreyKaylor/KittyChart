@@ -80,6 +80,9 @@ jobs:
       - name: License files into the package
         shell: bash
         run: cp LICENSE THIRD-PARTY-NOTICES bindings/python/
+      # macOS and Windows build with the runner's Rust, which can be well behind (Linux builds
+      # in maturin's containers).
+      - uses: dtolnay/rust-toolchain@stable
       - uses: PyO3/maturin-action@v1
         with:
           working-directory: bindings/python
@@ -90,6 +93,8 @@ jobs:
       - name: Test the wheel
         if: matrix.platform != 'musllinux'
         shell: bash
+        env:
+          PYTHONUTF8: "1" # the text chart's Braille, on a Windows console
         run: |
           python -m venv /tmp/wheel-venv || python -m venv wheel-venv
           venv=$( [ -d /tmp/wheel-venv ] && echo /tmp/wheel-venv || echo wheel-venv )

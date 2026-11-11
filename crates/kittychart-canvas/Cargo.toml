@@ -14,7 +14,7 @@ readme = "../../README.md"
 include = ["src/**/*", "fonts/**/*", "Cargo.toml", "LICENSE", "THIRD-PARTY-NOTICES"]
 
 [dependencies]
-tiny-skia = { workspace = true, default-features = false, features = ["std", "simd"] }
+tiny-skia = { workspace = true, features = ["std", "simd"] }
 cosmic-text = { workspace = true }
 
 [dev-dependencies]
