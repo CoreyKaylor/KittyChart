@@ -71,8 +71,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { key: libghostty }
       # libsixel's decoder checks the sixel encoder independently of our own decoder; tmux is
-      # the multiplexer in the end-to-end tests.
-      - run: sudo apt-get update && sudo apt-get install -y libsixel-bin tmux
+      # the multiplexer in the end-to-end tests. The libsixel packages are cached, and fetched
+      # from Ubuntu's own servers when they aren't: the runners' Azure mirror is at times
+      # unreachable. Their dependencies and tmux come with the runner image.
+      - uses: actions/cache@v4
+        id: debs
+        with: { path: ~/debs, key: debs-noble-libsixel-1.10.3-3build1 }
+      - if: steps.debs.outputs.cache-hit != 'true'
+        run: |
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update -o Acquire::Retries=3
+          mkdir -p ~/debs && cd ~/debs && apt-get download -o Acquire::Retries=3 libsixel1 libsixel-bin
+      - run: |
+          sudo dpkg -i ~/debs/*.deb
+          command -v tmux || sudo apt-get install -y tmux
+          img2sixel --version | head -1; tmux -V
       - run: cargo clippy -p kittychart-conformance -p kittychart-python -p kittychart-node --all-targets -- -D warnings
       # The end-to-end tests run the Python and Node packages (and a C program) on a PTY.
       - run: cd bindings/python && uv sync --group dev
