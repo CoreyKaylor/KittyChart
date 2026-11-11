@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from IPython.lib.pretty import pretty
@@ -8,10 +9,14 @@ import kittychart
 BAR = {"type": "bar", "data": {"labels": ["Q1", "Q2"], "datasets": [{"label": "Revenue", "data": [12, 19]}]}}
 
 
-def test_ipython_pretty_draws_the_chart(monkeypatch):
+def test_ipython_pretty_draws_the_chart(headless):
     # Terminal IPython prints the text/plain repr; for a chart that's the drawing itself.
-    monkeypatch.setenv("KITTYCHART_PROTOCOL", "text")
-    out = pretty(kittychart.Chart(BAR))
+    out = headless(
+        "import json, sys, kittychart; from IPython.lib.pretty import pretty; "
+        f"sys.stdout.write(json.dumps(pretty(kittychart.Chart({BAR!r}))))",
+        env={"KITTYCHART_PROTOCOL": "text"},
+    )
+    out = json.loads(out)
     assert "Revenue" in out and not out.endswith("\n")
 
 

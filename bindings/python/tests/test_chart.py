@@ -145,10 +145,8 @@ def test_text_modes():
     assert c.to_text(40, colors=dark) != c.to_text(40)
 
 
-def test_show_without_a_terminal_prints_text(capsys, monkeypatch):
-    # Under pytest there may still be a controlling terminal; force text mode on stdout.
-    kittychart.Chart(BAR).show(protocol="text", cols=40)
-    out = capsys.readouterr().out
+def test_show_without_a_terminal_prints_text(headless):
+    out = headless(f"import kittychart; kittychart.Chart({BAR!r}).show(cols=40)")
     assert "Revenue" in out and out.endswith("\n")
     with pytest.raises(ValueError):
         kittychart.Chart(BAR).show(protocol="png")
@@ -156,9 +154,9 @@ def test_show_without_a_terminal_prints_text(capsys, monkeypatch):
         kittychart.Chart(BAR).show(colors="nope")
 
 
-def test_module_show_accepts_dicts(capsys):
-    kittychart.show(BAR, protocol="braille", cols=30)
-    assert "Revenue" in capsys.readouterr().out
+def test_module_show_accepts_dicts(headless):
+    out = headless(f"import kittychart; kittychart.show({BAR!r}, protocol='braille', cols=30)")
+    assert "Revenue" in out and any("⠁" <= ch <= "⣿" for ch in out)
 
 
 def test_repr_png_for_notebooks():

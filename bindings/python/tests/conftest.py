@@ -1,5 +1,8 @@
 import json
+import os
 import struct
+import subprocess
+import sys
 import zlib
 from pathlib import Path
 
@@ -57,6 +60,33 @@ def fixture_config():
         return cfg, cfg.pop("_kc", {})
 
     return load
+
+
+@pytest.fixture
+def headless():
+    """Run Python code in a process with no terminal at all and return its stdout.
+
+    pytest's own process may have one (a controlling tty, or on Windows a console, which CI
+    runners always attach), and KittyChart draws on the terminal when stdout is redirected.
+    """
+
+    def run(code: str, env: "dict[str, str] | None" = None) -> str:
+        if sys.platform == "win32":
+            detach = {"creationflags": subprocess.DETACHED_PROCESS}  # no console
+        else:
+            detach = {"start_new_session": True}  # no controlling tty
+        r = subprocess.run(
+            [sys.executable, "-c", code],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            env={**os.environ, **(env or {})},
+            timeout=60,
+            **detach,
+        )
+        assert r.returncode == 0, r.stderr.decode(errors="replace")
+        return r.stdout.decode("utf-8")
+
+    return run
 
 
 @pytest.fixture(autouse=True)
