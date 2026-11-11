@@ -55,12 +55,14 @@ fn cli_in_tmux_uses_passthrough_and_placeholders() {
     )
     .unwrap();
     let socket = format!("kc-e2e-{}", std::process::id());
-    let cmd = format!("{} {} --cols 60; sleep 5", cli(), fixture("bar/grouped.json"));
+    // The CLI starts once tmux has settled with the outer terminal, as in real use: as the
+    // session's first command, its 250 ms probe could expire before tmux relays the replies.
+    let cmd = format!("sleep 1; {} {} --cols 60; sleep 5", cli(), fixture("bar/grouped.json"));
     let argv: Vec<String> = ["tmux", "-L", &socket, "-f", conf.to_str().unwrap(), "new-session", &cmd]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let r = run(&argv, true, &[], Some(3000));
+    let r = run(&argv, true, &[], Some(4000));
     let _ = Command::new("tmux").args(["-L", &socket, "kill-server"]).status();
 
     let p = placements(&r.term);
@@ -131,12 +133,14 @@ fn tmux_placeholders_wider_than_the_diacritic_table() {
     )
     .unwrap();
     let socket = format!("kc-e2e-wide-{}", std::process::id());
-    let cmd = format!("{} {} --rows 20; sleep 5", cli(), fixture("line/basic.json"));
+    // The CLI starts once tmux has settled with the outer terminal, as in real use: as the
+    // session's first command, its 250 ms probe could expire before tmux relays the replies.
+    let cmd = format!("sleep 1; {} {} --rows 20; sleep 5", cli(), fixture("line/basic.json"));
     let argv: Vec<String> = ["tmux", "-L", &socket, "-f", conf.to_str().unwrap(), "new-session", &cmd]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let r = run_geometry(&argv, 400, 32, true, &[], Some(3000));
+    let r = run_geometry(&argv, 400, 32, true, &[], Some(4000));
     let _ = Command::new("tmux").args(["-L", &socket, "kill-server"]).status();
     let p = placements(&r.term);
     if p.len() != 1 {
