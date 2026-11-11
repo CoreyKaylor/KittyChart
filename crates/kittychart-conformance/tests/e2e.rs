@@ -139,7 +139,25 @@ fn tmux_placeholders_wider_than_the_diacritic_table() {
     let r = run_geometry(&argv, 400, 32, true, &[], Some(3000));
     let _ = Command::new("tmux").args(["-L", &socket, "kill-server"]).status();
     let p = placements(&r.term);
-    assert_eq!(p.len(), 1, "{p:?}");
+    if p.len() != 1 {
+        // What tmux passed on, for diagnosing a tmux version that behaves differently.
+        let out = String::from_utf8_lossy(&r.out.output);
+        let screen = screen_text(&r.term);
+        panic!(
+            "expected one placement, got {p:?}\n\
+             tmux wrote {} bytes: {} kitty graphics commands ({} virtual placements), {} placeholder cells\n\
+             first commands: {:?}\nstart of the first two screen lines: {:?}",
+            r.out.output.len(),
+            out.matches("\x1b_G").count(),
+            out.matches("U=1").count(),
+            out.matches('\u{10EEEE}').count(),
+            out.match_indices("\x1b_G")
+                .take(4)
+                .map(|(i, _)| out[i..].chars().take(60).collect::<String>())
+                .collect::<Vec<_>>(),
+            screen.lines().take(2).map(|l| l.chars().take(24).collect::<String>()).collect::<Vec<_>>(),
+        );
+    }
     assert_eq!(p[0].grid, (400, 20));
     assert_whole_images(&r.term, &p);
 }

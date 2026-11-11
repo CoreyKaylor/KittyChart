@@ -77,6 +77,12 @@ jobs:
       # The end-to-end tests run the Python and Node packages (and a C program) on a PTY.
       - run: cd bindings/python && uv sync --group dev
       - run: cd bindings/node && npm ci --no-audit --no-fund && npm run build:debug
+      # The programs the end-to-end tests run, built the same way the tests build them, so a
+      # cold cache doesn't spend the tests' timeouts on compiling.
+      - run: |
+          cargo build -p kittychart-cli
+          cargo build -p kittychart-ffi
+          cargo build -p kittychart-ratatui --example dashboard
       - run: cargo nextest run --profile ci -p kittychart-conformance
 
   # L5: the bindings' own suites. pytest (numpy, pandas, polars, Rich, Textual, IPython) and

@@ -72,7 +72,11 @@ def headless():
 
     def run(code: str, env: "dict[str, str] | None" = None) -> str:
         if sys.platform == "win32":
-            detach = {"creationflags": subprocess.DETACHED_PROCESS}  # no console
+            # A venv's python.exe is a launcher that starts the real interpreter, which gets a
+            # console of its own even when the launcher has none. So the child drops whatever
+            # console it has itself (its stdout stays the pipe), and no window ever shows.
+            code = "import ctypes; ctypes.windll.kernel32.FreeConsole()\n" + code
+            detach = {"creationflags": subprocess.CREATE_NO_WINDOW}
         else:
             detach = {"start_new_session": True}  # no controlling tty
         r = subprocess.run(
