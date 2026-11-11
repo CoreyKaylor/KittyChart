@@ -16,7 +16,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -28,12 +28,12 @@ categories = ["visualization", "command-line-utilities"]
 
 [workspace.dependencies]
 # Published crates need a version beside the path: keep it equal to workspace.package.version.
-kittychart-canvas = { path = "crates/kittychart-canvas", version = "0.1.0" }
-kittychart-term = { path = "crates/kittychart-term", version = "0.1.0" }
+kittychart-canvas = { path = "crates/kittychart-canvas", version = "0.1.1" }
+kittychart-term = { path = "crates/kittychart-term", version = "0.1.1" }
 kittychart-testkit = { path = "crates/kittychart-testkit" }
-kittychart-core = { path = "crates/kittychart-core", version = "0.1.0" }
-kittychart = { path = "crates/kittychart", version = "0.1.0" }
-kittychart-ratatui = { path = "crates/kittychart-ratatui", version = "0.1.0" }
+kittychart-core = { path = "crates/kittychart-core", version = "0.1.1" }
+kittychart = { path = "crates/kittychart", version = "0.1.1" }
+kittychart-ratatui = { path = "crates/kittychart-ratatui", version = "0.1.1" }
 
 tiny-skia = { version = "0.12.0", default-features = false }
 cosmic-text = { version = "0.19.0", default-features = false, features = ["std"] }

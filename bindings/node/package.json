@@ -1,6 +1,6 @@
 {
   "name": "kittychart",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Chart.js-compatible charts for graphics-capable terminals (kitty, Ghostty, WezTerm, foot \u2026)",
   "license": "MIT",
   "repository": {
