@@ -1279,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "datatest-stable",
  "dssim-core",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-canvas"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cosmic-text",
  "kittychart-testkit",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "kittychart",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-conformance"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.23.1",
  "kittychart",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "csscolorparser 0.9.0",
  "elsa",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-ffi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cbindgen",
  "kittychart",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-node"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kittychart",
  "napi",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-preview"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "kittychart",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-python"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kittychart",
  "pyo3",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-ratatui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "crossterm",
  "insta",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-term"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.23.1",
  "flate2",
@@ -1413,7 +1413,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-testkit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.23.1",
  "dssim-core",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "kittychart-wasm"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kittychart",
  "kittychart-core",
