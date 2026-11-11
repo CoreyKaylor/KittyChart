@@ -59,7 +59,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.target }}
-          path: kittychart-*.*
+          # The archives only: `kittychart-*.*` would also match the staging directory, whose
+          # name has the version's dots in it.
+          path: |
+            kittychart-*.tar.gz
+            kittychart-*.zip
 
   wheels:
     name: Python wheel (${{ matrix.platform }} ${{ matrix.target }})
